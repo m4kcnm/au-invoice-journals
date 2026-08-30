@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div>
+    <h2>Bills & Expenses Dashboard</h2>
+    <div class="page-subtitle">Automatic OCR capture, Australian GST verification, and double-entry general ledger posting.</div>
+  </div>
+  <div style="display: flex; gap: 0.6rem;">
+    <form action="/sample" method="post"><button class="btn" type="submit">Load Sample Bill</button></form>
+    <form action="/inbox" method="post"><button class="btn" type="submit">Scan Inbox Folder</button></form>
+  </div>
+</div>
+
+<div class="grid-2">
+  <!-- INBOX CARD -->
+  <article class="card">
+    <header>
+      <h3>Bills Awaiting Verification</h3>
+      <span class="muted">{{ pending }} pending</span>
+    </header>
+    <div class="table-responsive">
+      <table class="wide">
+        <thead>
+          <tr>
+            <th>Supplier / Bill</th>
+            <th style="text-align: right;">Total Amount</th>
+            <th style="text-align: center;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for inv in invoices %}
+          <tr>
+            <td><a href="/invoices/{{ inv.id }}"><strong>{{ inv.supplier_name or inv.filename }}</strong></a></td>
+            <td style="text-align: right;">{{ inv.total | aud }}</td>
+            <td style="text-align: center;"><span class="tag {{ inv.status }}">{{ inv.status }}</span></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="3" class="muted" style="text-align: center; padding: 1.5rem;">No invoices in inbox.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <!-- RECENT JOURNALS CARD -->
+  <article class="card">
+    <header>
+      <h3>Recent Purchase Journals</h3>
+      <span class="muted">{% if ollama_ok %}<span class="ok">● AI Engine Active</span>{% else %}<span class="bad">● Ollama Offline</span>{% endif %}</span>
+    </header>
+    <div class="table-responsive">
+      <table class="wide">
+        <thead>
+          <tr>
+            <th style="width: 70px;">Ref #</th>
+            <th>Narration</th>
+            <th style="text-align: center;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for j in journals %}
+          <tr>
+            <td><a href="/journals/{{ j.id }}"><strong>#{{ j.id }}</strong></a></td>
+            <td>{{ j.narration }}</td>
+            <td style="text-align: center;"><span class="tag {{ j.status }}">{{ j.status }}</span></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="3" class="muted" style="text-align: center; padding: 1.5rem;">No journals posted yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</div>
+{% endblock %}

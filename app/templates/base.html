@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}AU Invoice Journals{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="drop-overlay" class="drop-overlay">
+    <div class="drop-modal">
+      <div class="drop-icon">📄</div>
+      <h3>Drop Invoice PDF Here</h3>
+      <p class="muted">File will be ingested, rendered, and queued for extraction immediately.</p>
+    </div>
+  </div>
+
+  <header class="app-header">
+    <div class="nav-left">
+      <div class="app-brand">
+        <div class="brand-logo-dot">GL</div>
+        <span>Accounting</span>
+        <span class="org-title">{{ entity }}</span>
+      </div>
+      <nav class="main-nav">
+        <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
+        <a href="/invoices" class="{% if request.url.path.startswith('/invoices') %}active{% endif %}">Bills to Pay</a>
+        <a href="/search" class="{% if request.url.path.startswith('/search') %}active{% endif %}">Search</a>
+        <a href="/mapping" class="{% if request.url.path.startswith('/mapping') %}active{% endif %}">Mapping Studio</a>
+        <a href="/accounts" class="{% if request.url.path.startswith('/accounts') %}active{% endif %}">Chart of Accounts</a>
+        <a href="/journals" class="{% if request.url.path.startswith('/journals') %}active{% endif %}">Manual Journals</a>
+        <a href="/settings" class="{% if request.url.path.startswith('/settings') %}active{% endif %}">Settings</a>
+      </nav>
+    </div>
+    
+    <div class="nav-right">
+      <span class="gst-badge">{% if gst_on %}GST Registered{% else %}BAS Excluded{% endif %}</span>
+      
+      {% if current_user %}
+      <div style="display: flex; align-items: center; gap: 0.6rem; border-left: 1px solid rgba(255,255,255,0.2); padding-left: 0.8rem;">
+        <span class="tag" style="background: rgba(255,255,255,0.15); color: #fff; font-size: 0.7rem; text-transform: uppercase;">
+          {{ current_user.role }}
+        </span>
+        <span style="font-size: 0.85rem; color: #e2e8f0;">{{ current_user.username }}</span>
+        <a href="/logout" style="color: #cbd5e1; font-size: 0.8rem; text-decoration: none; margin-left: 0.2rem;" title="Sign out">&rarr;</a>
+      </div>
+      {% endif %}
+
+      <form action="/sample" method="post" style="margin: 0;">
+        <button class="btn action" type="submit" style="padding: 0.35rem 0.8rem; font-size: 0.8rem;">+ Sample Bill</button>
+      </form>
+    </div>
+  </header>
+
+  <main>
+    {% block body %}{% endblock %}
+  </main>
+
+  <script src="/static/app.js?v=2.3"></script>
+</body>
+</html>

@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% block title %}Bill #{{ inv.id }} — {{ inv.supplier_name or "Invoice" }}{% endblock %}
+{% block body %}
+<div id="invoice-view" data-invoice-id="{{ inv.id }}" data-status="{{ inv.status }}">
+
+  <!-- TOP BREADCRUMB & HEADER -->
+  <div class="page-header" style="margin-bottom: 1rem;">
+    <div>
+      <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.2rem;">
+        <a href="/invoices" style="color: var(--accent-blue); text-decoration: none;">Bills to pay</a> &rsaquo; Bill #{{ inv.id }}
+        {% if next_id %}
+          <span style="margin-left: 0.8rem;"><a id="next-invoice-link" href="/invoices/{{ next_id }}" class="muted" style="text-decoration: none;">Next Bill &rarr; (Press <kbd>]</kbd>)</a></span>
+        {% endif %}
+      </div>
+      <h2>{{ inv.supplier_name or "Verifying Bill..." }}</h2>
+    </div>
+    <div style="display: flex; gap: 0.6rem; align-items: center;">
+      <a class="btn" href="/invoices/{{ inv.id }}/pdf" target="_blank">Download PDF</a>
+      <form action="/invoices/{{ inv.id }}/extract" method="post" class="inline">
+        <button class="btn" type="submit">Re-extract with AI</button>
+      </form>
+      {% if current_user and current_user.role == 'approver' %}
+      <form action="/invoices/{{ inv.id }}/delete" method="post" class="inline" onsubmit="return confirm('Are you sure you want to permanently delete this bill and its associated files?');">
+        <button class="btn danger" type="submit">Delete Bill</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if duplicate_invoice %}
+  <div class="alert" style="margin-bottom: 1.2rem; background: var(--accent-amber-bg); border-color: var(--accent-amber);">
+    ⚠️ <strong>Potential Duplicate Bill:</strong> Invoice #{{ inv.invoice_number }} with ABN {{ inv.supplier_abn }} already exists as <a href="/invoices/{{ duplicate_invoice.id }}" style="font-weight: 700; color: var(--navy-primary);">Bill #{{ duplicate_invoice.id }}</a>. Please confirm prior to posting.
+  </div>
+  {% endif %}
+
+  <div class="split-viewport">
+    <!-- LEFT: DOCUMENT VIEWER -->
+    <section class="viewport-left">
+      <div class="card pdf-card">
+        <div class="doc-viewer-canvas">
+          {% for p in range(page_count) %}
+          <div class="doc-page-wrapper">
+            <div class="doc-page-badge">Page {{ p + 1 }} of {{ page_count }}</div>
+            <img src="/invoices/{{ inv.id }}/page/{{ p }}" alt="Page {{ p + 1 }}" class="doc-page-img" />
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT: REACTIVE FORM, JOURNAL PREVIEW & AUDIT LOG -->
+    <section class="viewport-right">
+      <form class="card stack" method="post" action="/invoices/{{ inv.id }}/save" id="inv-form" data-invoice-id="{{ inv.id }}">
+        <header>
+          <h3>Invoice Verification</h3>
+          <span class="tag {{ inv.status }}" id="status-tag">
+            {% if inv.status == 'imported' %}⏳ Extracting via AI...{% else %}{{ inv.status }}{% endif %}
+          </span>
+        </header>
+
+        {% if inv.status == 'imported' %}
+        <div class="skeleton-banner">
+          <div class="spinner"></div>
+          <span>Reading coordinates & tax lines... Preview updates automatically.</span>
+        </div>
+        {% endif %}
+
+        {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+        <label>Supplier Trading Name
+          <input name="supplier_name" value="{{ inv.supplier_name or '' }}" />
+        </label>
+
+        <label>Australian Business Number (ABN)
+          <input name="supplier_abn" value="{{ inv.supplier_abn or '' }}" />
+          {% if abn_ok == True %}
+            <span class="ok">✓ Verified ABN (ATO Modulus 89 Passed)</span>
+          {% elif abn_ok == False and inv.supplier_abn %}
+            <span class="bad">✗ Invalid ABN Checksum</span>
+          {% endif %}
+        </label>
+
+        <div class="row2">
+          <label>Invoice Number
+            <input name="invoice_number" value="{{ inv.invoice_number or '' }}" placeholder="e.g. INV-10482" />
+          </label>
+          <label>Invoice Category
+            <select name="invoice_type_id">
+              <option value="">— Auto (from mapping rules) —</option>
+              {% for t in types %}
+              <option value="{{ t.id }}" {% if inv.invoice_type_id == t.id %}selected{% endif %}>{{ t.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+
+        <div class="row2">
+          <label>Issue Date <input type="date" name="invoice_date" value="{{ inv.invoice_date | isodate }}" /></label>
+          <label>Due Date <input type="date" name="due_date" value="{{ inv.due_date | isodate }}" /></label>
+        </div>
+
+        <div class="checks">
+          <label><input type="checkbox" name="is_tax_invoice" {% if inv.is_tax_invoice %}checked{% endif %} /> Tax invoice</label>
+          <label><input type="checkbox" name="gst_inclusive" {% if inv.gst_inclusive %}checked{% endif %} /> Amounts are GST inclusive</label>
+          <label><input type="checkbox" name="gst_registered" {% if inv.gst_registered %}checked{% endif %} /> Claim GST Credits (1B)</label>
+        </div>
+
+        <div class="row3">
+          <label>Net (Ex GST) <input name="subtotal_ex_gst" value="{{ inv.subtotal_ex_gst or '0.00' }}" style="text-align: right;" /></label>
+          <label>GST Amount <input name="gst_amount" value="{{ inv.gst_amount or '0.00' }}" style="text-align: right;" /></label>
+          <label>Total Due <input name="total" value="{{ inv.total or '0.00' }}" style="text-align: right;" /></label>
+        </div>
+
+        <h3 style="margin-top: 0.6rem;">Line Item Allocations</h3>
+        <div class="table-responsive">
+          <table class="lines" id="lines">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th style="width: 95px; text-align: right;">Amount</th>
+                <th style="width: 85px; text-align: right;">GST</th>
+                <th style="width: 130px;">Tax Rate</th>
+                <th>Account Code</th>
+                <th style="width: 36px; text-align: center;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for ln in inv.lines %}
+              <tr>
+                <td><input name="line_desc_{{ loop.index0 }}" value="{{ ln.description or '' }}" /></td>
+                <td><input name="line_amount_{{ loop.index0 }}" value="{{ ln.amount or '0.00' }}" style="text-align: right;" /></td>
+                <td><input name="line_gst_{{ loop.index0 }}" value="{{ ln.gst_amount or '0.00' }}" style="text-align: right;" /></td>
+                <td>
+                  <select name="line_treatment_{{ loop.index0 }}">
+                    <option value="">(from mapping)</option>
+                    {% for t in treatments %}
+                    <option value="{{ t }}" {% if ln.gst_treatment == t %}selected{% endif %}>{{ t }}</option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td>
+                  <select name="line_account_{{ loop.index0 }}">
+                    <option value="">(from mapping)</option>
+                    {% for a in accounts %}
+                    <option value="{{ a.id }}" {% if ln.account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td style="text-align: center;">
+                  <button type="button" class="btn-remove-line" title="Remove line item">&times;</button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        
+        <button class="btn" type="button" id="add-line">+ Add Line</button>
+
+        <!-- ACTION BUTTONS WITH ROLE PERMISSIONS -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; border-top: 1px solid var(--border-light); padding-top: 1rem;">
+          <button class="btn" type="submit" title="Shortcut: Cmd+S">Save Review</button>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <button class="btn" type="submit" form="inv-form" formaction="/invoices/{{ inv.id }}/journal" name="action" value="draft">Save Draft</button>
+            
+            {% if current_user and current_user.role == 'approver' %}
+              <button class="btn primary" type="submit" form="inv-form" formaction="/invoices/{{ inv.id }}/journal" name="action" value="post" id="btn-post-journal" title="Shortcut: Cmd+Enter">Approve & Post</button>
+            {% else %}
+              <button class="btn" type="button" disabled title="Only users with the 'approver' role can post journals to the General Ledger.">Approval Restricted (Approver Only)</button>
+            {% endif %}
+          </div>
+        </div>
+      </form>
+
+      <!-- LIVE REACTIVE PROPOSED JOURNAL -->
+      <article class="card tight">
+        <header>
+          <h3>Proposed General Ledger Journal</h3>
+          <span id="journal-balance-badge">
+            {% if preview and preview.balanced %}
+              <span class="ok">● Balanced</span>
+            {% else %}
+              <span class="bad">● Out of Balance</span>
+            {% endif %}
+          </span>
+        </header>
+
+        <div id="journal-warnings">
+          {% if preview %}
+            {% for w in preview.warnings %}<div class="alert" style="margin-bottom: 0.6rem;">{{ w }}</div>{% endfor %}
+          {% endif %}
+        </div>
+
+        <div class="table-responsive">
+          <table class="wide" id="preview-table">
+            <thead>
+              <tr>
+                <th>Account Code & Name</th>
+                <th>Description</th>
+                <th>BAS</th>
+                <th style="text-align: right;">Debit (AUD)</th>
+                <th style="text-align: right;">Credit (AUD)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% if preview %}
+                {% for ln in preview.lines %}
+                <tr>
+                  <td><strong>{{ ln.account_code }}</strong> {{ ln.account_name }}</td>
+                  <td>{{ ln.description }}</td>
+                  <td><span class="tag" style="background: #edf2f7;">{{ ln.bas_label or "—" }}</span></td>
+                  <td style="text-align: right;">{% if ln.debit %}{{ ln.debit | aud }}{% endif %}</td>
+                  <td style="text-align: right;">{% if ln.credit %}{{ ln.credit | aud }}{% endif %}</td>
+                </tr>
+                {% endfor %}
+              {% endif %}
+            </tbody>
+            <tfoot>
+              {% if preview %}
+              <tr>
+                <th colspan="3">Totals</th>
+                <th style="text-align: right;">{{ preview.total_dr | aud }}</th>
+                <th style="text-align: right;">{{ preview.total_cr | aud }}</th>
+              </tr>
+              {% endif %}
+            </tfoot>
+          </table>
+        </div>
+      </article>
+
+      <!-- AUDIT & COMPLIANCE TIMELINE -->
+      <article class="card tight">
+        <header>
+          <h3>Audit & Compliance Log</h3>
+          <span class="muted">{{ inv.audit_logs | length }} events</span>
+        </header>
+        <div class="table-responsive">
+          <table class="wide" style="font-size: 0.8rem;">
+            <thead>
+              <tr>
+                <th style="width: 145px;">Timestamp</th>
+                <th style="width: 95px;">User</th>
+                <th style="width: 140px;">Action</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for log in inv.audit_logs %}
+              <tr>
+                <td class="muted">{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td><strong>{{ log.username }}</strong></td>
+                <td><span class="tag {{ log.action | lower }}">{{ log.action }}</span></td>
+                <td>{{ log.details }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="4" class="muted" style="text-align: center; padding: 1rem;">No audit logs recorded yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+    </section>
+  </div>
+</div>
+{% endblock %}

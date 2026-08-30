@@ -1,0 +1,21 @@
+# Python Virtual Environments & Bytecode
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Databases & Invoices (Confidential / State Data)
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.pdf
+
+# Operating System & Diagnostic Dumps
+.DS_Store
+codebase_dump.txt
+*.log
+
+# Local Environment Variables
+.env

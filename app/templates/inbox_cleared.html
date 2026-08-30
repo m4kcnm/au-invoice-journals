@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}All Caught Up!{% endblock %}
+{% block body %}
+<div class="card" style="text-align: center; padding: 4rem 2rem; max-width: 600px; margin: 2rem auto;">
+  <div style="font-size: 3.5rem; margin-bottom: 1rem;">🎉</div>
+  <h2 style="margin-bottom: 0.5rem;">All bills posted!</h2>
+  <p class="muted" style="font-size: 1rem; margin-bottom: 2rem;">
+    Every invoice in your inbox has been reviewed and posted to the General Ledger.
+  </p>
+  <div style="display: flex; justify-content: center; gap: 1rem;">
+    <a class="btn primary" href="/journals">View Posted Journals</a>
+    <a class="btn" href="/invoices">Go to Invoices</a>
+  </div>
+</div>
+{% endblock %}

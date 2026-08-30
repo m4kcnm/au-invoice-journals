@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block body %}
+<h2>Settings</h2>
+<form class="card stack" method="post" action="/settings">
+  <label>Entity name <input name="entity_name" value="{{ entity_name }}" /></label>
+  <label>GST
+    <select name="gst_registered">
+      <option value="true" {% if gst_registered %}selected{% endif %}>Registered — split GST, claim 1B</option>
+      <option value="false" {% if not gst_registered %}selected{% endif %}>Not registered — expense the gross</option>
+    </select>
+  </label>
+  <label>Accounting basis
+    <select name="accounting_basis">
+      <option value="accrual" {% if accounting_basis == 'accrual' %}selected{% endif %}>Accrual (credit AP)</option>
+      <option value="cash" {% if accounting_basis == 'cash' %}selected{% endif %}>Cash (still drafts AP; pay separately)</option>
+    </select>
+  </label>
+  <label>Ollama URL <input name="ollama_url" value="{{ ollama_url }}" /></label>
+  <p class="muted">{% if ollama_ok %}Connected.{% else %}Not connected — start Ollama from the Dock or run <code>ollama serve</code>.{% endif %}</p>
+  <label>Model
+    <select name="ollama_model">
+      <option value="">Auto (first suitable local model)</option>
+      {% for m in models %}
+      <option value="{{ m }}" {% if ollama_model == m %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <p class="lede">Local only: PDFs never leave this computer. Pull a model once with <code>ollama pull llama3.2</code> (add <code>llama3.2-vision</code> for scanned pages).</p>
+  <button class="btn primary" type="submit">Save settings</button>
+</form>
+{% endblock %}

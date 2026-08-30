@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Bills to Pay{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div>
+    <h2>Bills to Pay</h2>
+    <div class="page-subtitle">Manage extracted creditor invoices, review tax treatment, and post purchase entries.</div>
+  </div>
+  <div style="display: flex; gap: 0.6rem;">
+    <form action="/upload" method="post" enctype="multipart/form-data">
+      <label class="btn action">
+        + Upload PDF
+        <input type="file" name="file" accept="application/pdf" hidden onchange="this.form.submit()" />
+      </label>
+    </form>
+    <form action="/inbox" method="post"><button class="btn" type="submit">Scan Inbox Folder</button></form>
+  </div>
+</div>
+
+<div class="table-responsive">
+  <table class="wide">
+    <thead>
+      <tr>
+        <th style="width: 70px;">ID</th>
+        <th style="width: 110px;">Date</th>
+        <th>Supplier</th>
+        <th style="width: 140px;">Invoice #</th>
+        <th style="width: 110px; text-align: right;">GST (1B)</th>
+        <th style="width: 120px; text-align: right;">Gross Total</th>
+        <th style="width: 110px; text-align: center;">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for inv in invoices %}
+      <tr>
+        <td><a href="/invoices/{{ inv.id }}"><strong>#{{ inv.id }}</strong></a></td>
+        <td>{{ inv.invoice_date or "—" }}</td>
+        <td>
+          <a href="/invoices/{{ inv.id }}"><strong>{{ inv.supplier_name or inv.filename }}</strong></a>
+        </td>
+        <td>{{ inv.invoice_number or "—" }}</td>
+        <td style="text-align: right;">{{ inv.gst_amount | aud }}</td>
+        <td style="text-align: right;"><strong>{{ inv.total | aud }}</strong></td>
+        <td style="text-align: center;"><span class="tag {{ inv.status }}">{{ inv.status }}</span></td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="7" class="muted" style="text-align: center; padding: 2rem;">
+          No bills in the system. Click <strong>+ Upload PDF</strong> above to begin.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

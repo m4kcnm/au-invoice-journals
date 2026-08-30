@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Journals{% endblock %}
+{% block body %}
+<h2>Journals</h2>
+<table class="wide">
+  <thead><tr><th>ID</th><th>Date</th><th>Narration</th><th>Status</th></tr></thead>
+  <tbody>
+    {% for j in journals %}
+    <tr>
+      <td><a href="/journals/{{ j.id }}">{{ j.id }}</a></td>
+      <td>{{ j.date }}</td>
+      <td>{{ j.narration }}</td>
+      <td><span class="tag {{ j.status }}">{{ j.status }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No journals yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

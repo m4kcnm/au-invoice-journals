@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login — AU Invoice Journals</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body style="display: flex; align-items: center; justify-content: center; min-height: 100vh; background-color: var(--navy-primary);">
+  <div class="card" style="width: 100%; max-width: 400px; padding: 2.2rem; box-shadow: 0 15px 35px rgba(0,0,0,0.35);">
+    <div style="text-align: center; margin-bottom: 1.5rem;">
+      <div class="brand-logo-dot" style="margin: 0 auto 0.8rem; width: 36px; height: 36px; font-size: 1rem;">GL</div>
+      <h2 style="margin: 0; font-size: 1.4rem; color: var(--navy-primary);">General Ledger Access</h2>
+      <p class="muted" style="margin-top: 0.3rem; font-size: 0.85rem;">Segregation of Duties & AP Verification</p>
+    </div>
+
+    {% if error %}
+    <div class="alert" style="margin-bottom: 1.2rem; background: var(--accent-red-bg); border-color: #fbc7bc; color: var(--accent-red);">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/login" class="stack">
+      <label>Username
+        <input type="text" name="username" required autofocus placeholder="e.g. clerk or manager" />
+      </label>
+      <label>Password
+        <input type="password" name="password" required placeholder="••••••••" />
+      </label>
+
+      <button class="btn primary" type="submit" style="width: 100%; padding: 0.65rem; margin-top: 0.5rem; font-size: 0.95rem;">
+        Sign In
+      </button>
+    </form>
+
+    <div style="margin-top: 1.5rem; padding-top: 1.2rem; border-top: 1px solid var(--border-light); font-size: 0.78rem; color: var(--text-muted);">
+      <strong>Demo Accounts:</strong><br />
+      • <strong>clerk</strong> / <code>password123</code> (Operator — uploads & edits)<br />
+      • <strong>manager</strong> / <code>password123</code> (Approver — commits to General Ledger)
+    </div>
+  </div>
+</body>
+</html>

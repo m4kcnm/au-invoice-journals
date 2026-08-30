@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}Mapping Studio{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div>
+    <h2>Mapping Studio</h2>
+    <div class="page-subtitle">Configure ledger routing rules, creditor expense defaults, and automated keyword matchers.</div>
+  </div>
+</div>
+
+<div class="tabs" id="tabs">
+  <button type="button" class="tab-btn on" data-tab="creditors">Creditors</button>
+  <button type="button" class="tab-btn" data-tab="types">Invoice Categories</button>
+  <button type="button" class="tab-btn" data-tab="rules">Mapping Rules</button>
+  <button type="button" class="tab-btn" data-tab="test">Test Mapper</button>
+</div>
+
+<!-- TAB 1: CREDITORS -->
+<section class="tab-pane on" id="tab-creditors">
+  <article class="card">
+    <header>
+      <h3>Creditor Expense Defaults</h3>
+      <span class="muted">{{ creditors|length }} creditors registered</span>
+    </header>
+    <p class="muted" style="margin-top: 0;">Set default general ledger expense accounts for extracted creditors to auto-route future bills.</p>
+    
+    {% for c in creditors %}
+    <form class="map-row" action="/mapping/creditor/{{ c.id }}" method="post">
+      <div>
+        <strong>{{ c.name }}</strong>
+        <div class="muted" style="font-size: 0.78rem;">{{ c.abn | abn or "No ABN recorded" }}</div>
+      </div>
+      <select name="default_account_id">
+        <option value="">— No default ledger —</option>
+        {% for a in accounts %}
+        <option value="{{ a.id }}" {% if c.default_account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
+        {% endfor %}
+      </select>
+      <select name="gst_treatment">
+        {% for t in treatments %}
+        <option value="{{ t }}" {% if c.gst_treatment == t %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      <select name="invoice_type_id">
+        <option value="">— Category —</option>
+        {% for t in types %}
+        <option value="{{ t.id }}" {% if c.invoice_type_id == t.id %}selected{% endif %}>{{ t.name }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn" type="submit">Save</button>
+    </form>
+    {% else %}
+    <p class="muted" style="padding: 1.5rem; text-align: center;">No creditors recorded yet. Upload a bill to automatically learn creditor records.</p>
+    {% endfor %}
+  </article>
+</section>
+
+<!-- TAB 2: INVOICE TYPES -->
+<section class="tab-pane" id="tab-types">
+  <article class="card">
+    <header>
+      <h3>Invoice Categories</h3>
+      <span class="muted">Keyword-driven matching</span>
+    </header>
+    
+    {% for t in types %}
+    <div style="display: flex; gap: 0.5rem; align-items: center; border-bottom: 1px solid var(--border-light); padding: 0.5rem 0;">
+      <form class="map-row" action="/mapping/types" method="post" style="flex: 1; border-bottom: none; padding: 0;">
+        <input type="hidden" name="type_id" value="{{ t.id }}" />
+        <input name="name" value="{{ t.name }}" style="font-weight: 600;" required />
+        <select name="account_id">
+          <option value="">— No Ledger —</option>
+          {% for a in accounts %}
+          <option value="{{ a.id }}" {% if t.account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
+          {% endfor %}
+        </select>
+        <select name="gst_treatment">
+          {% for tr in treatments %}
+          <option value="{{ tr }}" {% if t.gst_treatment == tr %}selected{% endif %}>{{ tr }}</option>
+          {% endfor %}
+        </select>
+        <input name="keywords" value="{{ t.keywords }}" placeholder="Comma-separated keywords" />
+        <button class="btn" type="submit">Save</button>
+      </form>
+      <form action="/mapping/types/{{ t.id }}/delete" method="post" onsubmit="return confirm('Delete category {{ t.name }}?');">
+        <button class="btn danger" type="submit">Delete</button>
+      </form>
+    </div>
+    {% endfor %}
+
+    <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">+ Add New Category</h4>
+    <form class="map-row" action="/mapping/types" method="post" style="background: #f8fafc; padding: 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
+      <input name="name" placeholder="Category Name (e.g. Subscriptions)" required />
+      <select name="account_id">
+        <option value="">— Default Ledger —</option>
+        {% for a in accounts %}<option value="{{ a.id }}">{{ a.code }} {{ a.name }}</option>{% endfor %}
+      </select>
+      <select name="gst_treatment">
+        {% for tr in treatments %}<option value="{{ tr }}">{{ tr }}</option>{% endfor %}
+      </select>
+      <input name="keywords" placeholder="Keywords: adobe, canva, github" />
+      <button class="btn primary" type="submit">+ Add</button>
+    </form>
+  </article>
+</section>
+
+<!-- TAB 3: RULES -->
+<section class="tab-pane" id="tab-rules">
+  <article class="card">
+    <header>
+      <h3>Rule Hierarchy</h3>
+      <span class="muted">Lower priority number executes first</span>
+    </header>
+    
+    <table class="wide" style="margin-bottom: 1.5rem;">
+      <thead>
+        <tr>
+          <th style="width: 70px;">Pri</th>
+          <th>Rule Name</th>
+          <th>Match On</th>
+          <th>Pattern</th>
+          <th>Target Ledger</th>
+          <th style="width: 80px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rules %}
+        <tr>
+          <td><strong>{{ r.priority }}</strong></td>
+          <td>{{ r.name }}</td>
+          <td><span class="tag" style="background: #edf2f7;">{{ r.match_on }}</span></td>
+          <td><code>{{ r.pattern }}</code></td>
+          <td>{% if r.account %}<strong>{{ r.account.code }}</strong> {{ r.account.name }}{% else %}<span class="muted">None</span>{% endif %}</td>
+          <td style="text-align: right;">
+            <form action="/mapping/rules/{{ r.id }}/delete" method="post" onsubmit="return confirm('Delete rule {{ r.name }}?');">
+              <button class="btn danger" style="padding: 0.2rem 0.5rem; font-size: 0.75rem;" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <h4>+ Create Mapping Rule</h4>
+    <form class="map-row" action="/mapping/rules" method="post" style="background: #f8fafc; padding: 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
+      <input name="name" placeholder="Rule Name" required />
+      <select name="match_on">
+        <option value="supplier">Match Supplier Name</option>
+        <option value="abn">Match ABN</option>
+        <option value="description">Match Line Description</option>
+        <option value="invoice_type">Match Category</option>
+      </select>
+      <input name="pattern" placeholder="Search Pattern / Keyword" required />
+      <select name="account_id">
+        <option value="">— Ledger Account —</option>
+        {% for a in accounts %}<option value="{{ a.id }}">{{ a.code }} {{ a.name }}</option>{% endfor %}
+      </select>
+      <button class="btn primary" type="submit">+ Add Rule</button>
+    </form>
+  </article>
+</section>
+
+<!-- TAB 4: TEST MAPPER -->
+<section class="tab-pane" id="tab-test">
+  <article class="card stack">
+    <header>
+      <h3>Test Resolution Mapper</h3>
+      <span class="muted">Simulate rule resolution without persisting data</span>
+    </header>
+    <div class="row2">
+      <label>Supplier Name <input id="t-supplier" placeholder="e.g. Origin Energy" /></label>
+      <label>ABN <input id="t-abn" placeholder="e.g. 33071052287" /></label>
+    </div>
+    <div class="row2">
+      <label>Line Description <input id="t-desc" placeholder="e.g. Electricity Usage Peak" /></label>
+      <label>Invoice Category
+        <select id="t-type">
+          <option value="">— Auto Detect —</option>
+          {% for t in types %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <button class="btn action" type="button" id="t-run" style="align-self: flex-start;">Run Mapper Simulation</button>
+    <pre id="t-out" class="out">Simulation results will appear here...</pre>
+  </article>
+</section>
+{% endblock %}

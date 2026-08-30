@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Journal {{ j.id }}{% endblock %}
+{% block body %}
+<p class="kicker">{{ j.status }} · {{ j.date }}</p>
+<h2>{{ j.narration }}</h2>
+<p><a class="btn" href="/journals/{{ j.id }}/csv">Export CSV</a>
+{% if j.invoice_id %}<a class="btn" href="/invoices/{{ j.invoice_id }}">Source invoice</a>{% endif %}</p>
+<table class="wide">
+  <thead><tr><th>Account</th><th>Description</th><th>BAS</th><th>Debit</th><th>Credit</th></tr></thead>
+  <tbody>
+    {% for ln in j.lines %}
+    <tr>
+      <td>{{ ln.account.code }} {{ ln.account.name }}</td>
+      <td>{{ ln.description }}</td>
+      <td>{{ ln.bas_label }}</td>
+      <td>{% if ln.debit %}{{ ln.debit | aud }}{% endif %}</td>
+      <td>{% if ln.credit %}{{ ln.credit | aud }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr><th colspan="3">Totals</th><th>{{ dr | aud }}</th><th>{{ cr | aud }}</th></tr>
+  </tfoot>
+</table>
+{% endblock %}

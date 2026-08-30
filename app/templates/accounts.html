@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Ledgers{% endblock %}
+{% block body %}
+<h2>Chart of accounts</h2>
+<p class="lede">Australian small-business layout. System accounts (bank, payables, GST receivable) are used when posting purchase journals.</p>
+<form class="map-row" action="/accounts" method="post">
+  <input name="code" placeholder="6-2700" required />
+  <input name="name" placeholder="Account name" required />
+  <select name="type">
+    <option>asset</option><option>liability</option><option>equity</option><option>income</option><option selected>expense</option>
+  </select>
+  <select name="gst_treatment">
+    {% for t in treatments %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+  </select>
+  <button class="btn primary" type="submit">Add ledger</button>
+</form>
+<table class="wide">
+  <thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Default GST</th><th></th></tr></thead>
+  <tbody>
+    {% for a in accounts %}
+    <tr>
+      <td>{{ a.code }}</td>
+      <td>{{ a.name }}</td>
+      <td>{{ a.type }}</td>
+      <td>{{ a.gst_treatment }}</td>
+      <td>{% if a.is_system %}<span class="muted">system</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

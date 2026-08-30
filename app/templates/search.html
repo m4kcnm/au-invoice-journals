@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Smart Search{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div>
+    <h2>Smart Search</h2>
+    <div class="page-subtitle">Search invoices across creditors, line items, amounts, and general ledger accounts.</div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom: 1.5rem;">
+  <form id="search-form" style="display: flex; gap: 0.6rem; align-items: center;">
+    <div style="position: relative; flex: 1;">
+      <input 
+        type="text" 
+        id="search-input" 
+        name="q" 
+        placeholder="e.g. 'Show utilities bills over $50' or 'Computer & IT expenses from July'" 
+        style="width: 100%; font-size: 1rem; padding: 0.65rem 0.9rem;"
+        autofocus 
+        autocomplete="off"
+      />
+    </div>
+    <button class="btn action" type="submit" style="padding: 0.65rem 1.2rem;" id="search-btn">
+      Search
+    </button>
+  </form>
+</div>
+
+<!-- LIVE LOADING SKELETON -->
+<div id="search-loading" class="skeleton-banner" style="display: none; margin-bottom: 1.5rem;">
+  <div class="spinner"></div>
+  <span>Analysing natural query parameters and scanning ledger records...</span>
+</div>
+
+<!-- INTENT PREVIEW ACCORDION -->
+<details id="intent-container" class="tight" style="display: none; margin-bottom: 1.2rem;">
+  <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.85rem;">View Extracted Query Intent</summary>
+  <pre id="intent-pre" class="out" style="margin-top: 0.4rem;"></pre>
+</details>
+
+<!-- RESULTS WRAPPER -->
+<div id="results-wrapper">
+  <div class="table-responsive">
+    <table class="wide" id="results-table">
+      <thead>
+        <tr>
+          <th style="width: 70px;">ID</th>
+          <th style="width: 110px;">Date</th>
+          <th>Supplier</th>
+          <th style="width: 130px;">Invoice #</th>
+          <th>Allocated Ledger</th>
+          <th style="width: 110px; text-align: right;">GST (1B)</th>
+          <th style="width: 120px; text-align: right;">Total</th>
+          <th style="width: 110px; text-align: center;">Status</th>
+        </tr>
+      </thead>
+      <tbody id="results-body">
+        <tr>
+          <td colspan="8" class="muted" style="text-align: center; padding: 2.5rem;">
+            Enter a natural language search query above to find matching records.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
