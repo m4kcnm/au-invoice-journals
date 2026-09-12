@@ -17,6 +17,37 @@
 
 <!-- TAB 1: CREDITORS -->
 <section class="tab-pane on" id="tab-creditors">
+  <!-- Register New Creditor -->
+  <article class="card" style="margin-bottom: 1.5rem;">
+    <header>
+      <h3>Register New Creditor</h3>
+      <span class="muted">Add a vendor manually to pre-configure ledger routing</span>
+    </header>
+    <form class="map-row" action="/mapping/creditors/new" method="post" style="background: #f8fafc; padding: 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
+      <input name="name" placeholder="Trading Name (e.g. Diamond Energy)" required style="flex: 1.5;" />
+      <input name="abn" placeholder="ABN (optional)" style="flex: 1;" />
+      <select name="default_account_id" style="flex: 1.5;">
+        <option value="">— Default Ledger —</option>
+        {% for a in accounts %}
+        <option value="{{ a.id }}">{{ a.code }} {{ a.name }}</option>
+        {% endfor %}
+      </select>
+      <select name="gst_treatment" style="flex: 1;">
+        {% for t in treatments %}
+        <option value="{{ t }}" {% if t == 'taxable' %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      <select name="invoice_type_id" style="flex: 1;">
+        <option value="">— Category —</option>
+        {% for t in types %}
+        <option value="{{ t.id }}">{{ t.name }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn primary" type="submit">+ Add</button>
+    </form>
+  </article>
+
+  <!-- Creditor Expense Defaults -->
   <article class="card">
     <header>
       <h3>Creditor Expense Defaults</h3>
@@ -25,32 +56,37 @@
     <p class="muted" style="margin-top: 0;">Set default general ledger expense accounts for extracted creditors to auto-route future bills.</p>
     
     {% for c in creditors %}
-    <form class="map-row" action="/mapping/creditor/{{ c.id }}" method="post">
-      <div>
-        <strong>{{ c.name }}</strong>
-        <div class="muted" style="font-size: 0.78rem;">{{ c.abn | abn or "No ABN recorded" }}</div>
-      </div>
-      <select name="default_account_id">
-        <option value="">— No default ledger —</option>
-        {% for a in accounts %}
-        <option value="{{ a.id }}" {% if c.default_account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
-        {% endfor %}
-      </select>
-      <select name="gst_treatment">
-        {% for t in treatments %}
-        <option value="{{ t }}" {% if c.gst_treatment == t %}selected{% endif %}>{{ t }}</option>
-        {% endfor %}
-      </select>
-      <select name="invoice_type_id">
-        <option value="">— Category —</option>
-        {% for t in types %}
-        <option value="{{ t.id }}" {% if c.invoice_type_id == t.id %}selected{% endif %}>{{ t.name }}</option>
-        {% endfor %}
-      </select>
-      <button class="btn" type="submit">Save</button>
-    </form>
+    <div style="display: flex; gap: 0.5rem; align-items: center; border-bottom: 1px solid var(--border-light); padding: 0.5rem 0;">
+      <form class="map-row" action="/mapping/creditor/{{ c.id }}" method="post" style="flex: 1; border-bottom: none; padding: 0;">
+        <div style="min-width: 180px;">
+          <strong>{{ c.name }}</strong>
+          <div class="muted" style="font-size: 0.78rem;">{{ c.abn | abn or "No ABN recorded" }}</div>
+        </div>
+        <select name="default_account_id">
+          <option value="">— No default ledger —</option>
+          {% for a in accounts %}
+          <option value="{{ a.id }}" {% if c.default_account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
+          {% endfor %}
+        </select>
+        <select name="gst_treatment">
+          {% for t in treatments %}
+          <option value="{{ t }}" {% if c.gst_treatment == t %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+        <select name="invoice_type_id">
+          <option value="">— Category —</option>
+          {% for t in types %}
+          <option value="{{ t.id }}" {% if c.invoice_type_id == t.id %}selected{% endif %}>{{ t.name }}</option>
+          {% endfor %}
+        </select>
+        <button class="btn" type="submit">Save</button>
+      </form>
+      <form action="/mapping/creditor/{{ c.id }}/delete" method="post" onsubmit="return confirm('Delete creditor {{ c.name }}?');" style="margin: 0;">
+        <button class="btn danger" style="padding: 0.4rem 0.6rem; font-size: 0.8rem;" type="submit">Delete</button>
+      </form>
+    </div>
     {% else %}
-    <p class="muted" style="padding: 1.5rem; text-align: center;">No creditors recorded yet. Upload a bill to automatically learn creditor records.</p>
+    <p class="muted" style="padding: 1.5rem; text-align: center;">No creditors recorded yet. Upload a bill or register one above.</p>
     {% endfor %}
   </article>
 </section>

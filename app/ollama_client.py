@@ -73,15 +73,15 @@ def chat_json(
         "messages": messages,
         "options": {
             "temperature": 0.0,
-            "num_ctx": 2048,
-            "num_predict": 512,
+            "num_ctx": 4096,
+            "num_predict": 1024,
             "top_k": 20,
             "top_p": 0.9,
         },
     }
 
     try:
-        with _client(base_url, timeout=25.0) as c:
+        with _client(base_url, timeout=60.0) as c:
             r = c.post("/api/chat", json=payload)
             r.raise_for_status()
             content = r.json().get("message", {}).get("content") or "{}"

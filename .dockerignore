@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+.git/
+.gitignore
+data/invoices/*
+!data/invoices/.gitkeep
+data/app.db
+*.log

@@ -535,6 +535,48 @@ def save_creditor(
         session.close()
     return RedirectResponse("/mapping#creditors", status_code=303)
 
+@app.post("/mapping/creditors/new")
+def create_creditor(
+    name: str = Form(...),
+    abn: str = Form(""),
+    default_account_id: str = Form(""),
+    gst_treatment: str = Form("taxable"),
+    invoice_type_id: str = Form(""),
+    notes: str = Form(""),
+    user: User = Depends(require_approver),
+):
+    session = SessionLocal()
+    try:
+        from app.abn import digits_only
+        cred = Creditor(
+            name=name.strip(),
+            abn=digits_only(abn),
+            default_account_id=int(default_account_id) if default_account_id else None,
+            gst_treatment=gst_treatment,
+            invoice_type_id=int(invoice_type_id) if invoice_type_id else None,
+            notes=notes.strip(),
+        )
+        session.add(cred)
+        session.commit()
+    finally:
+        session.close()
+    return RedirectResponse("/mapping#creditors", status_code=303)
+
+
+@app.post("/mapping/creditor/{creditor_id}/delete")
+def delete_creditor(creditor_id: int, user: User = Depends(require_approver)):
+    session = SessionLocal()
+    try:
+        c = session.get(Creditor, creditor_id)
+        if c:
+            # Unlink invoices referencing this creditor before deletion
+            for inv in session.query(Invoice).filter_by(creditor_id=creditor_id):
+                inv.creditor_id = None
+            session.delete(c)
+            session.commit()
+    finally:
+        session.close()
+    return RedirectResponse("/mapping#creditors", status_code=303)
 
 @app.post("/mapping/types")
 def save_type(

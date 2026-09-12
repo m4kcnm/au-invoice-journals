@@ -1,0 +1,14 @@
+services:
+  invoice-app:
+    build: .
+    container_name: au-invoice-journals
+    restart: unless-stopped
+    ports:
+      - "8743:8743"
+    environment:
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    volumes:
+      - ./app:/app/app
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

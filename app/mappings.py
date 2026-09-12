@@ -31,17 +31,20 @@ def match_invoice_type(session, invoice: Invoice, line: InvoiceLine | None = Non
 
 
 def match_rule(session, invoice: Invoice, line: InvoiceLine | None) -> MappingRule | None:
+    from app.abn import digits_only
     rules = (
         session.query(MappingRule)
         .order_by(MappingRule.priority.asc(), MappingRule.id.asc())
         .all()
     )
     desc = (line.description if line else "") or ""
+    inv_abn = digits_only(invoice.supplier_abn)
+
     for rule in rules:
         p = rule.pattern or ""
         if rule.match_on == "supplier" and _ci_contains(invoice.supplier_name, p):
             return rule
-        if rule.match_on == "abn" and p.replace(" ", "") in (invoice.supplier_abn or "").replace(" ", ""):
+        if rule.match_on == "abn" and digits_only(p) and digits_only(p) == inv_abn:
             return rule
         if rule.match_on == "description" and (_ci_contains(desc, p) or _ci_contains(invoice.filename, p)):
             return rule
@@ -53,7 +56,7 @@ def match_rule(session, invoice: Invoice, line: InvoiceLine | None) -> MappingRu
 
 
 def resolve_mapping(session, invoice: Invoice, line: InvoiceLine | None = None) -> dict:
-    """Resolves ledger hierarchy with a guaranteed non-null expense account fallback."""
+    from app.abn import digits_only
     unallocated = (
         account_by_code(session, "6-9000")
         or account_by_code(session, "6-1300")
@@ -64,13 +67,27 @@ def resolve_mapping(session, invoice: Invoice, line: InvoiceLine | None = None) 
     treatment = ""
     source = "unallocated"
 
-    # 1. Match invoice category or creditor
+    # 1. Match category
     itype = match_invoice_type(session, invoice, line)
+
+    # 2. Match creditor: ABN-first fallback
     creditor = session.get(Creditor, invoice.creditor_id) if invoice.creditor_id else None
+    
+    inv_abn = digits_only(invoice.supplier_abn)
+    if not creditor and len(inv_abn) == 11:
+        for c in session.query(Creditor).filter(Creditor.abn.isnot(None)).all():
+            if digits_only(c.abn) == inv_abn:
+                creditor = c
+                break
+
     if not creditor and invoice.supplier_name:
         creditor = session.query(Creditor).filter(Creditor.name.ilike(invoice.supplier_name.strip())).first()
 
-    # 2. Rule matching
+    # If creditor has a linked invoice category and none was detected, inherit it
+    if creditor and creditor.invoice_type_id and not itype:
+        itype = session.get(InvoiceType, creditor.invoice_type_id)
+
+    # 3. Rule matching
     rule = match_rule(session, invoice, line)
     if line and line.account_id:
         account = session.get(Account, line.account_id)
@@ -84,14 +101,14 @@ def resolve_mapping(session, invoice: Invoice, line: InvoiceLine | None = None) 
             itype = session.get(InvoiceType, rule.invoice_type_id)
     elif creditor and creditor.default_account_id:
         account = session.get(Account, creditor.default_account_id)
-        source = "creditor"
+        source = f"creditor:{creditor.name}"
         treatment = creditor.gst_treatment or treatment
     elif itype and itype.account_id:
         account = session.get(Account, itype.account_id)
         source = f"type:{itype.name}"
         treatment = itype.gst_treatment or treatment
 
-    # 3. Line-level GST treatment overrides
+    # 4. Line-level GST treatment overrides
     if line and line.gst_treatment:
         treatment = line.gst_treatment
         if source == "unallocated":
@@ -120,7 +137,6 @@ def resolve_mapping(session, invoice: Invoice, line: InvoiceLine | None = None) 
         "creditor": creditor,
         "source": source,
     }
-
 
 def preview_resolution(supplier: str, abn: str, description: str, invoice_type_id: int | None) -> dict:
     from app.models import SessionLocal

@@ -53,18 +53,36 @@ def log_audit_event(session, action: str, invoice_id: int | None = None, user=No
 
 
 def upsert_creditor(session, name: str, abn: str) -> Creditor | None:
+    from app.abn import digits_only
     name = (name or "").strip()
-    if not name:
-        return None
-    row = session.query(Creditor).filter(Creditor.name.ilike(name)).first()
-    if row is None:
-        row = Creditor(name=name, abn=abn or "")
+    abn_clean = digits_only(abn)
+
+    # 1. Prioritize lookup by 11-digit ABN
+    if len(abn_clean) == 11:
+        # Check against both digit-only and spaced ABNs in DB
+        all_creditors = session.query(Creditor).filter(Creditor.abn.isnot(None)).all()
+        for c in all_creditors:
+            if digits_only(c.abn) == abn_clean:
+                # If existing creditor had a truncated/partial name, update it
+                if name and (len(c.name) < len(name) or c.name.lower() in name.lower()):
+                    c.name = name
+                return c
+
+    # 2. Fall back to name lookup (if valid name provided)
+    if len(name) >= 3:
+        row = session.query(Creditor).filter(Creditor.name.ilike(name)).first()
+        if row:
+            if abn_clean and not row.abn:
+                row.abn = abn_clean
+            return row
+
+        # 3. Create new creditor if neither matched
+        row = Creditor(name=name, abn=abn_clean or "")
         session.add(row)
         session.flush()
-    elif abn and not row.abn:
-        row.abn = abn
-    return row
+        return row
 
+    return None
 
 def ingest_pdf(src: Path, original_name: str | None = None, user=None) -> Invoice:
     INVOICES_DIR.mkdir(parents=True, exist_ok=True)
@@ -108,7 +126,8 @@ def extract_invoice(invoice_id: int) -> None:
     # 2. Run AI extraction with no active database lock
     captured = capture_document(Path(stored_path))
     raw_text = captured.get("text") or ""
-    raw_data, method_used = run_hybrid_extract(raw_text, ollama_url=url, model=model)
+    b64_image = captured.get("b64_image")
+    raw_data, method_used = run_hybrid_extract(raw_text, ollama_url=url, model=model, b64_image=b64_image)
     norm = normalize_extracted(raw_data, raw_text)
 
     # 3. Write structured results atomically
@@ -118,9 +137,32 @@ def extract_invoice(invoice_id: int) -> None:
         if not inv:
             return
 
+        # --- ABN-FIRST CREDITOR LOOKUP ---
+        extracted_abn = digits_only(norm.get("supplier_abn") or "")
+        extracted_name = (norm.get("supplier_name") or "").strip()
+
+        matched_creditor = None
+        if len(extracted_abn) == 11:
+            for c in session.query(Creditor).filter(Creditor.abn.isnot(None)).all():
+                if digits_only(c.abn) == extracted_abn:
+                    matched_creditor = c
+                    break
+
+        if matched_creditor:
+            inv.supplier_name = matched_creditor.name
+            inv.creditor_id = matched_creditor.id
+            if matched_creditor.invoice_type_id:
+                inv.invoice_type_id = matched_creditor.invoice_type_id
+        else:
+            inv.supplier_name = extracted_name
+            cred = upsert_creditor(session, inv.supplier_name, extracted_abn)
+            if cred:
+                inv.creditor_id = cred.id
+                if cred.invoice_type_id:
+                    inv.invoice_type_id = cred.invoice_type_id
+
         inv.raw_text = raw_text
-        inv.supplier_name = norm.get("supplier_name") or ""
-        inv.supplier_abn = norm.get("supplier_abn") or ""
+        inv.supplier_abn = extracted_abn
         inv.invoice_number = norm.get("invoice_number") or ""
         inv.invoice_date = norm.get("invoice_date")
         inv.due_date = norm.get("due_date")
@@ -131,6 +173,7 @@ def extract_invoice(invoice_id: int) -> None:
         inv.total = money(norm.get("total") or 0)
         inv.gst_registered = gst_registered
 
+        # Clear existing lines and persist newly normalized lines
         for ln in list(inv.lines):
             session.delete(ln)
         session.flush()
@@ -146,12 +189,6 @@ def extract_invoice(invoice_id: int) -> None:
                 )
             )
 
-        cred = upsert_creditor(session, inv.supplier_name, inv.supplier_abn)
-        if cred:
-            inv.creditor_id = cred.id
-            if cred.invoice_type_id:
-                inv.invoice_type_id = cred.invoice_type_id
-
         inv.status = "extracted"
         log_audit_event(session, "EXTRACTED", invoice_id=inv.id, details=f"Extracted via {method_used}")
         session.commit()
@@ -161,7 +198,6 @@ def extract_invoice(invoice_id: int) -> None:
         raise e
     finally:
         session.close()
-
 
 def apply_invoice_form(invoice_id: int, form: dict, user=None) -> None:
     session = SessionLocal()
