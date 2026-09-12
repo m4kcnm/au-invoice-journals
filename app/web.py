@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import csv
 import io
 import json
@@ -49,6 +51,7 @@ from app.sample import write_sample_invoice
 from app.search import execute_invoice_search, parse_natural_query
 from app.seed import seed_if_empty
 from app.services import (
+    build_transient_invoice,
     apply_invoice_form,
     archive_posted_invoice,
     extract_invoice,
@@ -201,9 +204,13 @@ def dashboard(request: Request, user: User = Depends(get_current_user)):
 @app.post("/upload")
 def upload(bg: BackgroundTasks, file: UploadFile = File(...), user: User = Depends(get_current_user)):
     data = file.file.read()
-    tmp = INBOX_DIR / (file.filename or "upload.pdf")
+    # Strip any user-supplied directory traversal components
+    safe_name = Path(file.filename or "upload.pdf").name
+    clean_stem = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", safe_name)
+    secure_disk_name = f"{uuid.uuid4().hex}_{clean_stem}"
+    tmp = INBOX_DIR / secure_disk_name
     tmp.write_bytes(data)
-    inv = ingest_pdf(tmp, file.filename or tmp.name, user=user)
+    inv = ingest_pdf(tmp, original_name=safe_name, user=user)
     tmp.unlink(missing_ok=True)
     bg.add_task(extract_invoice, inv.id)
     return RedirectResponse(f"/invoices/{inv.id}", status_code=303)
@@ -243,10 +250,18 @@ def download_aba_file(user: User = Depends(require_approver)):
     try:
         invoices = (
             session.query(Invoice)
-            .filter(Invoice.status == "posted")
+            .filter(Invoice.status == "posted", Invoice.payment_status != "batched")
             .order_by(Invoice.id.asc())
             .all()
         )
+
+        if not invoices:
+            return Response(content="No unbatched posted invoices available for ABA export.", media_type="text/plain")
+
+        for inv in invoices:
+            inv.payment_status = "batched"
+            log_audit_event(session, "BATCHED_FOR_PAYMENT", invoice_id=inv.id, user=user, details="Included in exported ABA pay run.")
+        session.commit()
 
         bank_code = get_setting(session, "bank_code", "PCU")
         user_name = get_setting(session, "entity_name", "My Australian Business")
@@ -340,7 +355,7 @@ def invoice_detail(request: Request, invoice_id: int, error: str = "", user: Use
 
 
 @app.get("/invoices/{invoice_id}/status")
-def invoice_status(invoice_id: int):
+def invoice_status(invoice_id: int, user: User = Depends(get_current_user)):
     session = SessionLocal()
     try:
         inv = session.get(Invoice, invoice_id)
@@ -368,7 +383,7 @@ def invoice_pdf(invoice_id: int, user: User = Depends(get_current_user)):
 
 
 @app.get("/invoices/{invoice_id}/page/{page_num}")
-def invoice_page_image(invoice_id: int, page_num: int = 0):
+def invoice_page_image(invoice_id: int, page_num: int = 0, user: User = Depends(get_current_user)):
     session = SessionLocal()
     try:
         inv = session.get(Invoice, invoice_id)
@@ -408,15 +423,15 @@ def invoice_extract(bg: BackgroundTasks, invoice_id: int, user: User = Depends(g
 @app.post("/invoices/{invoice_id}/recalculate")
 async def invoice_recalculate(request: Request, invoice_id: int, user: User = Depends(get_current_user)):
     form = dict(await request.form())
-    try:
-        apply_invoice_form(invoice_id, form, user=user)
-    except ValueError as val_err:
-        return JSONResponse(status_code=400, content={"error": str(val_err)})
-
     session = SessionLocal()
     try:
         inv = session.get(Invoice, invoice_id)
-        preview = build_journal_preview(session, inv)
+        if not inv:
+            return JSONResponse(status_code=404, content={"error": "Invoice not found"})
+
+        # Pure in-memory calculation: evaluate preview without persisting changes or logging audit events
+        transient_inv = build_transient_invoice(inv, form)
+        preview = build_journal_preview(session, transient_inv)
         lines = []
         for l in preview["lines"]:
             lines.append({
@@ -437,7 +452,7 @@ async def invoice_recalculate(request: Request, invoice_id: int, user: User = De
         })
     except Exception as e:
         traceback.print_exc()
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": "Preview computation failed"})
     finally:
         session.close()
 
@@ -506,6 +521,9 @@ def invoice_delete(invoice_id: int, user: User = Depends(require_approver)):
                     os.remove(inv.stored_path)
                 except OSError:
                     pass
+            for log in inv.audit_logs:
+                log.invoice_id = None
+            session.flush()
             for j in list(inv.journals):
                 session.delete(j)
             session.delete(inv)
