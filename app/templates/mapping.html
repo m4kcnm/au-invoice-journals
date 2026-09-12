@@ -4,208 +4,17 @@
 <div class="page-header">
   <div>
     <h2>Mapping Studio</h2>
-    <div class="page-subtitle">Configure ledger routing rules, creditor expense defaults, direct entry banking, and bank change audit trails.</div>
+    <div class="page-subtitle">Configure general ledger routing rules, keyword matchers, and expense categories.</div>
   </div>
 </div>
 
 <div class="tabs" id="tabs">
-  <button type="button" class="tab-btn on" data-tab="creditors">Creditors & Banking</button>
-  <button type="button" class="tab-btn" data-tab="audit">Creditor Change Log</button>
+  <button type="button" class="tab-btn on" data-tab="rules">Mapping Rules</button>
   <button type="button" class="tab-btn" data-tab="types">Invoice Categories</button>
-  <button type="button" class="tab-btn" data-tab="rules">Mapping Rules</button>
   <button type="button" class="tab-btn" data-tab="test">Test Mapper</button>
 </div>
 
-<!-- TAB 1: CREDITORS -->
-<section class="tab-pane on" id="tab-creditors">
-  <article class="card" style="margin-bottom: 1.5rem;">
-    <header>
-      <h3>Register New Creditor</h3>
-      <span class="muted">Add vendor with GL default and payment remittance details</span>
-    </header>
-    <form class="map-row" action="/mapping/creditors/new" method="post" style="background: #f8fafc; padding: 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-light); display: flex; flex-wrap: wrap; gap: 0.5rem;">
-      <input name="name" placeholder="Trading Name (e.g. Origin Energy)" required style="flex: 1.5; min-width: 160px;" />
-      <input name="abn" placeholder="ABN" style="width: 120px;" />
-      <input name="bsb" placeholder="BSB (XXX-XXX)" style="width: 105px;" />
-      <input name="bank_account_number" placeholder="Account #" style="width: 110px;" />
-      <input name="bank_account_name" placeholder="Account Title" style="width: 130px;" />
-      <select name="default_account_id" style="flex: 1.2; min-width: 160px;">
-        <option value="">— Default Ledger —</option>
-        {% for a in accounts %}
-        <option value="{{ a.id }}">{{ a.code }} {{ a.name }}</option>
-        {% endfor %}
-      </select>
-      <select name="gst_treatment" style="width: 100px;">
-        {% for t in treatments %}
-        <option value="{{ t }}" {% if t == 'taxable' %}selected{% endif %}>{{ t }}</option>
-        {% endfor %}
-      </select>
-      <select name="invoice_type_id" style="width: 120px;">
-        <option value="">— Category —</option>
-        {% for t in types %}
-        <option value="{{ t.id }}">{{ t.name }}</option>
-        {% endfor %}
-      </select>
-      <button class="btn primary" type="submit">+ Add Creditor</button>
-    </form>
-  </article>
-
-  <article class="card">
-    <header>
-      <h3>Creditor Directory & Payment Settings</h3>
-      <span class="muted">{{ creditors|length }} creditors registered</span>
-    </header>
-    
-    {% for c in creditors %}
-    <div style="display: flex; gap: 0.5rem; align-items: center; border-bottom: 1px solid var(--border-light); padding: 0.6rem 0; flex-wrap: wrap;">
-      <form class="map-row" action="/mapping/creditor/{{ c.id }}" method="post" style="flex: 1; border-bottom: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
-        <div style="min-width: 170px;">
-          <strong>{{ c.name }}</strong>
-          <div class="muted" style="font-size: 0.78rem;">{{ c.abn | abn or "No ABN recorded" }}</div>
-        </div>
-
-        <input name="bsb" value="{{ c.bsb or '' }}" placeholder="BSB" style="width: 95px;" title="BSB format XXX-XXX" />
-        <input name="bank_account_number" value="{{ c.bank_account_number or '' }}" placeholder="Account #" style="width: 110px;" />
-        <input name="bank_account_name" value="{{ c.bank_account_name or '' }}" placeholder="Account Name" style="width: 125px;" />
-
-        <select name="default_account_id" style="flex: 1; min-width: 160px;">
-          <option value="">— No default ledger —</option>
-          {% for a in accounts %}
-          <option value="{{ a.id }}" {% if c.default_account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
-          {% endfor %}
-        </select>
-        <select name="gst_treatment" style="width: 100px;">
-          {% for t in treatments %}
-          <option value="{{ t }}" {% if c.gst_treatment == t %}selected{% endif %}>{{ t }}</option>
-          {% endfor %}
-        </select>
-        <select name="invoice_type_id" style="width: 120px;">
-          <option value="">— Category —</option>
-          {% for t in types %}
-          <option value="{{ t.id }}" {% if c.invoice_type_id == t.id %}selected{% endif %}>{{ t.name }}</option>
-          {% endfor %}
-        </select>
-        <button class="btn" type="submit">Save</button>
-      </form>
-      <form action="/mapping/creditor/{{ c.id }}/delete" method="post" onsubmit="return confirm('Delete creditor {{ c.name }}?');" style="margin: 0;">
-        <button class="btn danger" style="padding: 0.4rem 0.6rem; font-size: 0.8rem;" type="submit">Delete</button>
-      </form>
-    </div>
-    {% else %}
-    <p class="muted" style="padding: 1.5rem; text-align: center;">No creditors recorded yet. Ingest an invoice or add one above.</p>
-    {% endfor %}
-  </article>
-</section>
-
-<!-- TAB 2: CREDITOR CHANGE LOG (AUDIT TRAIL) -->
-<section class="tab-pane" id="tab-audit">
-  <article class="card">
-    <header>
-      <h3>Creditor Banking & Profile Change Log</h3>
-      <span class="muted">Immutable record of all BSB & Account creations, modifications, and warnings</span>
-    </header>
-    <div class="table-responsive">
-      <table class="wide" style="font-size: 0.85rem;">
-        <thead>
-          <tr>
-            <th style="width: 150px;">Timestamp</th>
-            <th style="width: 180px;">Creditor</th>
-            <th style="width: 130px;">Action</th>
-            <th style="width: 130px;">User / Agent</th>
-            <th>Old Details &rarr; New Details</th>
-            <th>Context / Reason</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% set all_logs = [] %}
-          {% for c in creditors %}
-            {% for l in c.audit_logs %}
-              {% set _ = all_logs.append((l, c)) %}
-            {% endfor %}
-          {% endfor %}
-
-          {% for l, c in all_logs | sort(attribute='0.timestamp', reverse=True) %}
-          <tr>
-            <td class="muted">{{ l.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-            <td><strong>{{ c.name }}</strong></td>
-            <td>
-              <span class="tag {% if 'MISMATCH' in l.action %}extracted{% elif 'MANUAL' in l.action %}reviewed{% else %}posted{% endif %}">
-                {{ l.action }}
-              </span>
-            </td>
-            <td><strong>{{ l.username }}</strong></td>
-            <td>
-              {% if l.old_bsb or l.new_bsb or l.old_account or l.new_account %}
-                <code>{{ l.old_bsb or 'None' }} / {{ l.old_account or 'None' }}</code> &rarr; <code>{{ l.new_bsb or 'None' }} / {{ l.new_account or 'None' }}</code>
-              {% else %}
-                <span class="muted">—</span>
-              {% endif %}
-            </td>
-            <td>{{ l.details }}</td>
-          </tr>
-          {% else %}
-          <tr>
-            <td colspan="6" class="muted" style="text-align: center; padding: 2rem;">
-              No creditor banking change events recorded yet.
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </article>
-</section>
-
-<!-- TAB 3: INVOICE TYPES -->
-<section class="tab-pane" id="tab-types">
-  <article class="card">
-    <header>
-      <h3>Invoice Categories</h3>
-      <span class="muted">Keyword-driven matching</span>
-    </header>
-    {% for t in types %}
-    <div style="display: flex; gap: 0.5rem; align-items: center; border-bottom: 1px solid var(--border-light); padding: 0.5rem 0;">
-      <form class="map-row" action="/mapping/types" method="post" style="flex: 1; border-bottom: none; padding: 0;">
-        <input type="hidden" name="type_id" value="{{ t.id }}" />
-        <input name="name" value="{{ t.name }}" style="font-weight: 600;" required />
-        <select name="account_id">
-          <option value="">— No Ledger —</option>
-          {% for a in accounts %}
-          <option value="{{ a.id }}" {% if t.account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
-          {% endfor %}
-        </select>
-        <select name="gst_treatment">
-          {% for tr in treatments %}
-          <option value="{{ tr }}" {% if t.gst_treatment == tr %}selected{% endif %}>{{ tr }}</option>
-          {% endfor %}
-        </select>
-        <input name="keywords" value="{{ t.keywords }}" placeholder="Comma-separated keywords" />
-        <button class="btn" type="submit">Save</button>
-      </form>
-      <form action="/mapping/types/{{ t.id }}/delete" method="post" onsubmit="return confirm('Delete category {{ t.name }}?');">
-        <button class="btn danger" type="submit">Delete</button>
-      </form>
-    </div>
-    {% endfor %}
-
-    <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">+ Add New Category</h4>
-    <form class="map-row" action="/mapping/types" method="post" style="background: #f8fafc; padding: 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
-      <input name="name" placeholder="Category Name (e.g. Subscriptions)" required />
-      <select name="account_id">
-        <option value="">— Default Ledger —</option>
-        {% for a in accounts %}<option value="{{ a.id }}">{{ a.code }} {{ a.name }}</option>{% endfor %}
-      </select>
-      <select name="gst_treatment">
-        {% for tr in treatments %}<option value="{{ tr }}">{{ tr }}</option>{% endfor %}
-      </select>
-      <input name="keywords" placeholder="Keywords: adobe, canva, github" />
-      <button class="btn primary" type="submit">+ Add</button>
-    </form>
-  </article>
-</section>
-
-<!-- TAB 4: RULES -->
-<section class="tab-pane" id="tab-rules">
+<section class="tab-pane on" id="tab-rules">
   <article class="card">
     <header>
       <h3>Rule Hierarchy</h3>
@@ -259,7 +68,53 @@
   </article>
 </section>
 
-<!-- TAB 5: TEST MAPPER -->
+<section class="tab-pane" id="tab-types">
+  <article class="card">
+    <header>
+      <h3>Invoice Categories</h3>
+      <span class="muted">Keyword-driven matching</span>
+    </header>
+    {% for t in types %}
+    <div style="display: flex; gap: 0.5rem; align-items: center; border-bottom: 1px solid var(--border-light); padding: 0.5rem 0;">
+      <form class="map-row" action="/mapping/types" method="post" style="flex: 1; border-bottom: none; padding: 0;">
+        <input type="hidden" name="type_id" value="{{ t.id }}" />
+        <input name="name" value="{{ t.name }}" style="font-weight: 600;" required />
+        <select name="account_id">
+          <option value="">— No Ledger —</option>
+          {% for a in accounts %}
+          <option value="{{ a.id }}" {% if t.account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
+          {% endfor %}
+        </select>
+        <select name="gst_treatment">
+          {% for tr in treatments %}
+          <option value="{{ tr }}" {% if t.gst_treatment == tr %}selected{% endif %}>{{ tr }}</option>
+          {% endfor %}
+        </select>
+        <input name="keywords" value="{{ t.keywords }}" placeholder="Comma-separated keywords" />
+        <button class="btn" type="submit">Save</button>
+      </form>
+      <form action="/mapping/types/{{ t.id }}/delete" method="post" onsubmit="return confirm('Delete category {{ t.name }}?');">
+        <button class="btn danger" type="submit">Delete</button>
+      </form>
+    </div>
+    {% endfor %}
+
+    <h4 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">+ Add New Category</h4>
+    <form class="map-row" action="/mapping/types" method="post" style="background: #f8fafc; padding: 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
+      <input name="name" placeholder="Category Name (e.g. Subscriptions)" required />
+      <select name="account_id">
+        <option value="">— Default Ledger —</option>
+        {% for a in accounts %}<option value="{{ a.id }}">{{ a.code }} {{ a.name }}</option>{% endfor %}
+      </select>
+      <select name="gst_treatment">
+        {% for tr in treatments %}<option value="{{ tr }}">{{ tr }}</option>{% endfor %}
+      </select>
+      <input name="keywords" placeholder="Keywords: adobe, canva, github" />
+      <button class="btn primary" type="submit">+ Add</button>
+    </form>
+  </article>
+</section>
+
 <section class="tab-pane" id="tab-test">
   <article class="card stack">
     <header>

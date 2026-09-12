@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}Creditor Directory & Maintenance{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div>
+    <h2>Creditor Directory & Maintenance</h2>
+    <div class="page-subtitle">Maintain vendor profiles, verified bank disbursement details (BSB & Account), and expense ledger defaults.</div>
+  </div>
+  <div>
+    <button class="btn primary" type="button" onclick="document.getElementById('new-creditor-card').classList.toggle('hidden');">
+      + Register New Creditor
+    </button>
+  </div>
+</div>
+
+<!-- Collapsible New Creditor Card -->
+<article class="card stack hidden" id="new-creditor-card" style="margin-bottom: 1.5rem; background: #f8fafc;">
+  <header>
+    <h3>Register New Creditor</h3>
+    <span class="muted">Add verified vendor and disbursement bank details</span>
+  </header>
+  <form action="/creditors/new" method="post">
+    <div style="display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center;">
+      <input name="name" placeholder="Trading Name (e.g. Origin Energy)" required style="flex: 1.5; min-width: 170px;" />
+      <input name="abn" placeholder="ABN (11 digits)" style="width: 130px;" />
+      <input name="bsb" placeholder="BSB (XXX-XXX)" style="width: 110px;" />
+      <input name="bank_account_number" placeholder="Account #" style="width: 115px;" />
+      <input name="bank_account_name" placeholder="Account Title" style="width: 135px;" />
+      <select name="default_account_id" style="flex: 1.2; min-width: 160px;">
+        <option value="">— Default Ledger —</option>
+        {% for a in accounts %}
+        <option value="{{ a.id }}">{{ a.code }} {{ a.name }}</option>
+        {% endfor %}
+      </select>
+      <select name="gst_treatment" style="width: 100px;">
+        {% for t in treatments %}
+        <option value="{{ t }}" {% if t == 'taxable' %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      <select name="invoice_type_id" style="width: 130px;">
+        <option value="">— Category —</option>
+        {% for t in types %}
+        <option value="{{ t.id }}">{{ t.name }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn primary" type="submit">+ Save</button>
+      <button class="btn" type="button" onclick="document.getElementById('new-creditor-card').classList.add('hidden');">Cancel</button>
+    </div>
+  </form>
+</article>
+
+<!-- Creditor Directory with Live Search and Filters -->
+<article class="card tight">
+  <header style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.8rem; padding: 1rem 1.2rem; border-bottom: 1px solid var(--border-light);">
+    <div style="display: flex; align-items: center; gap: 0.8rem;">
+      <h3 style="margin: 0;">Creditors (<span id="visible-count">{{ creditors|length }}</span>/{{ creditors|length }})</h3>
+      <div class="filter-pills" style="display: flex; gap: 0.4rem;">
+        <button type="button" class="btn active-pill" id="filter-all" onclick="setFilter('all')">All</button>
+        <button type="button" class="btn" id="filter-ready" onclick="setFilter('ready')">Ready for Pay Run</button>
+        <button type="button" class="btn" id="filter-missing" onclick="setFilter('missing')">Missing Bank Details</button>
+      </div>
+    </div>
+    
+    <div style="position: relative; min-width: 280px;">
+      <input 
+        id="creditor-search" 
+        type="search" 
+        placeholder="Filter by name, ABN, BSB, or account..." 
+        style="width: 100%; padding-left: 2rem;" 
+        oninput="applyFilter()"
+      />
+      <span style="position: absolute; left: 0.7rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.85rem;">🔍</span>
+    </div>
+  </header>
+
+  <div class="table-responsive">
+    <table class="wide" id="creditors-table">
+      <thead>
+        <tr>
+          <th>Vendor Name</th>
+          <th style="width: 140px;">ABN</th>
+          <th style="width: 180px;">Disbursement Bank (ABA)</th>
+          <th style="width: 170px;">Default GL Account</th>
+          <th style="width: 110px;">Category</th>
+          <th style="width: 90px; text-align: center;">Bills</th>
+          <th style="width: 110px; text-align: right;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in creditors %}
+        {% set has_bank = c.bsb and c.bank_account_number %}
+        <tr 
+          class="creditor-row" 
+          data-name="{{ c.name | lower }}" 
+          data-abn="{{ c.abn or '' }}" 
+          data-bsb="{{ c.bsb or '' }}" 
+          data-account="{{ c.bank_account_number or '' }}"
+          data-bank-status="{% if has_bank %}ready{% else %}missing{% endif %}"
+        >
+          <td>
+            <a href="/creditors/{{ c.id }}" style="font-weight: 700; color: var(--navy-primary); text-decoration: none;">
+              {{ c.name }}
+            </a>
+            {% if c.notes %}
+              <span class="muted" style="display: block; font-size: 0.75rem;">{{ c.notes }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if c.abn %}
+              <code>{{ c.abn | abn }}</code>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if has_bank %}
+              <span class="ok" style="font-size: 0.82rem; font-weight: 600;">✓ {{ c.bsb }} / {{ c.bank_account_number }}</span>
+              <div class="muted" style="font-size: 0.75rem;">{{ c.bank_account_name or c.name }}</div>
+            {% else %}
+              <span class="bad" style="font-size: 0.8rem; font-weight: 600;">⚠️ Missing Details</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if c.default_account %}
+              <strong>{{ c.default_account.code }}</strong> <span class="muted" style="font-size: 0.8rem;">{{ c.default_account.name }}</span>
+            {% else %}
+              <span class="muted">Unallocated</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if c.invoice_type %}
+              <span class="tag" style="background: #f1f5f9;">{{ c.invoice_type.name }}</span>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td style="text-align: center;">
+            <a href="/creditors/{{ c.id }}" class="tag" style="background: #e2e8f0; text-decoration: none; font-weight: 600;">
+              {{ c.invoices|length }}
+            </a>
+          </td>
+          <td style="text-align: right;">
+            <a class="btn" href="/creditors/{{ c.id }}" style="font-size: 0.78rem; padding: 0.25rem 0.6rem;">Edit</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="muted" style="text-align: center; padding: 2.5rem;">
+            No creditors on record. Click <strong>+ Register New Creditor</strong> above to add one.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+
+<style>
+  .hidden { display: none !important; }
+  .active-pill {
+    background: var(--navy-primary) !important;
+    color: #fff !important;
+    border-color: var(--navy-primary) !important;
+  }
+</style>
+
+<script>
+  let currentFilter = 'all';
+
+  function setFilter(status) {
+    currentFilter = status;
+    document.querySelectorAll('.filter-pills .btn').forEach(b => b.classList.remove('active-pill'));
+    document.getElementById('filter-' + status).classList.add('active-pill');
+    applyFilter();
+  }
+
+  function applyFilter() {
+    const q = (document.getElementById('creditor-search').value || '').trim().toLowerCase();
+    const rows = document.querySelectorAll('.creditor-row');
+    let visible = 0;
+
+    rows.forEach(row => {
+      const name = row.getAttribute('data-name') || '';
+      const abn = row.getAttribute('data-abn') || '';
+      const bsb = row.getAttribute('data-bsb') || '';
+      const acc = row.getAttribute('data-account') || '';
+      const bankStatus = row.getAttribute('data-bank-status') || '';
+
+      const matchesSearch = !q || name.includes(q) || abn.includes(q) || bsb.includes(q) || acc.includes(q);
+      const matchesFilter = (currentFilter === 'all') || (currentFilter === bankStatus);
+
+      if (matchesSearch && matchesFilter) {
+        row.style.display = '';
+        visible++;
+      } else {
+        row.style.display = 'none';
+      }
+    });
+
+    document.getElementById('visible-count').textContent = visible;
+  }
+</script>
+{% endblock %}

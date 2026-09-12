@@ -3,7 +3,6 @@
 {% block body %}
 <div id="invoice-view" data-invoice-id="{{ inv.id }}" data-status="{{ inv.status }}">
 
-  <!-- TOP BREADCRUMB & HEADER -->
   <div class="page-header" style="margin-bottom: 1rem;">
     <div>
       <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.2rem;">
@@ -34,7 +33,6 @@
   {% endif %}
 
   <div class="split-viewport">
-    <!-- LEFT: DOCUMENT VIEWER -->
     <section class="viewport-left">
       <div class="card pdf-card">
         <div class="doc-viewer-canvas">
@@ -48,8 +46,34 @@
       </div>
     </section>
 
-    <!-- RIGHT: REACTIVE FORM, JOURNAL PREVIEW & AUDIT LOG -->
     <section class="viewport-right">
+
+      <article class="card">
+        <header>
+          <h3>Creditor & Remittance Verification</h3>
+          {% if creditor %}
+            <a href="/creditors/{{ creditor.id }}" class="btn" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;">Edit Vendor Profile</a>
+          {% endif %}
+        </header>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; font-size: 0.88rem;">
+          <div>
+            <span class="muted">Matched Vendor:</span><br />
+            <strong>{{ creditor.name if creditor else (inv.supplier_name or 'Unmatched') }}</strong>
+            <div class="muted" style="font-size: 0.78rem;">ABN: {{ inv.supplier_abn | abn or 'None' }}</div>
+          </div>
+          <div>
+            <span class="muted">Disbursement Bank Details (ABA):</span><br />
+            {% if creditor and creditor.bsb and creditor.bank_account_number %}
+              <span class="ok">✓ BSB: {{ creditor.bsb }} | Acc: {{ creditor.bank_account_number }}</span>
+              <div class="muted" style="font-size: 0.78rem;">Title: {{ creditor.bank_account_name or creditor.name }}</div>
+            {% else %}
+              <span class="bad">⚠️ No Verified Bank Details on File</span>
+              <div class="muted" style="font-size: 0.78rem;">Add BSB & Account in <a href="/creditors/{{ creditor.id if creditor else '' }}">Creditor Hub</a></div>
+            {% endif %}
+          </div>
+        </div>
+      </article>
+
       <form class="card stack" method="post" action="/invoices/{{ inv.id }}/save" id="inv-form" data-invoice-id="{{ inv.id }}">
         <header>
           <h3>Invoice Verification</h3>
@@ -157,7 +181,6 @@
         
         <button class="btn" type="button" id="add-line">+ Add Line</button>
 
-        <!-- ACTION BUTTONS WITH ROLE PERMISSIONS -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; border-top: 1px solid var(--border-light); padding-top: 1rem;">
           <button class="btn" type="submit" title="Shortcut: Cmd+S">Save Review</button>
           <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -172,7 +195,6 @@
         </div>
       </form>
 
-      <!-- LIVE REACTIVE PROPOSED JOURNAL -->
       <article class="card tight">
         <header>
           <h3>Proposed General Ledger Journal</h3>
@@ -228,10 +250,9 @@
         </div>
       </article>
 
-      <!-- AUDIT & COMPLIANCE TIMELINE -->
       <article class="card tight">
         <header>
-          <h3>Audit & Compliance Log</h3>
+          <h3>Bill Audit & Event History</h3>
           <span class="muted">{{ inv.audit_logs | length }} events</span>
         </header>
         <div class="table-responsive">

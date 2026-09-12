@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Central Audit Trail{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div>
+    <h2>Central Audit & Compliance Log</h2>
+    <div class="page-subtitle">Full chronological event timeline covering document extraction, user reviews, general ledger postings, and creditor bank detail modifications.</div>
+  </div>
+</div>
+
+<article class="card">
+  <header>
+    <h3>Event Timeline</h3>
+    <span class="muted">{{ all_events|length }} total logged events</span>
+  </header>
+  <div class="table-responsive">
+    <table class="wide" style="font-size: 0.85rem;">
+      <thead>
+        <tr>
+          <th style="width: 155px;">Timestamp</th>
+          <th style="width: 110px;">Domain</th>
+          <th style="width: 110px;">User</th>
+          <th style="width: 150px;">Action</th>
+          <th style="width: 180px;">Reference Entity</th>
+          <th>Details & Changes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ev in all_events %}
+        <tr>
+          <td class="muted">{{ ev.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td>
+            {% if ev.domain == 'Creditor' %}
+              <span class="tag reviewed">Creditor</span>
+            {% else %}
+              <span class="tag posted">Invoice / GL</span>
+            {% endif %}
+          </td>
+          <td><strong>{{ ev.username }}</strong></td>
+          <td>
+            <span class="tag {% if 'POSTED' in ev.action %}posted{% elif 'BANK' in ev.action %}extracted{% elif 'DELETED' in ev.action %}bad{% else %}imported{% endif %}">
+              {{ ev.action }}
+            </span>
+          </td>
+          <td>
+            {% if ev.domain == 'Creditor' %}
+              <a href="/creditors/{{ ev.entity_id }}"><strong>{{ ev.entity_title }}</strong></a>
+            {% elif ev.domain == 'Invoice' %}
+              <a href="/invoices/{{ ev.entity_id }}"><strong>Bill #{{ ev.entity_id }}</strong> ({{ ev.entity_title }})</a>
+            {% else %}
+              <span>System</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if ev.diff %}
+              <code>{{ ev.diff }}</code><br />
+            {% endif %}
+            {{ ev.details }}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="muted" style="text-align: center; padding: 2.5rem;">No audit logs recorded yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+{% endblock %}

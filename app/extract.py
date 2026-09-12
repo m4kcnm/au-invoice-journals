@@ -15,33 +15,34 @@ from app.abn import digits_only, is_valid_abn
 from app.gst import gst_from_inclusive, money
 from app.ollama_client import chat_json, list_models, pick_model
 
-AI_SYSTEM_PROMPT = """You are an Accounts Payable, Remittance, and Tax Invoice AI Auditor.
-Extract structured bookkeeping and direct-entry payment attributes from this invoice or bill text (handling both Australian and international invoices).
+AI_SYSTEM_PROMPT = """You are an Accounts Payable and Tax Invoice AI Auditor.
+Extract structured bookkeeping attributes from this invoice or bill text (handling both Australian and international invoices).
 
-CRITICAL ENTITY & BANKING DISAMBIGUATION RULES:
+CRITICAL ENTITY DISAMBIGUATION RULES:
 - "supplier_name" MUST be the selling business / vendor issuing the bill.
 - NEVER use the customer / account holder name (the person or entity being billed).
-- Look for EFT / Direct Deposit payment options to identify payee bank details:
-  - "bsb": Australian 6-digit BSB (formatted as XXX-XXX or 6 digits). Set null if not found.
-  - "bank_account_number": Creditor's bank account number (digits only). Set null if not found.
-  - "bank_account_name": Account title / name on account if stated. Set null if not found.
+- Look for the legal trading name near the top header, tax registration title, or invoice title.
 - "line_items": Keep this concise. Summarize charges into at most 2-3 major line items.
 
+INVOICE IDENTIFIER RULES:
+- "invoice_number": Select the explicit commercial tax invoice or bill number (e.g. Invoice No, Tax Invoice #, Bill Number).
+- Do NOT use the ongoing customer Account Number or Customer ID if an explicit Invoice Number exists.
+
 TAX & JURISDICTION RULES:
-- Australia: Standard GST is 10% (1/11th of GST-inclusive amount).
-- International / Overseas: Set "supplier_abn", "bsb", and "bank_account_number" to null.
+- Australia: Standard GST is 10% (1/11th of GST-inclusive amount). Water, council rates, and financial charges are GST-free. Telco, energy, software, and general supplies are standard taxable.
+- International / Overseas:
+  - If the invoice is non-Australian, set "supplier_abn" to null.
+  - Map any foreign tax to "gst_amount".
+  - For international supplies without Australian GST registration, set line "gst_treatment" to "out_of_scope".
 
 Return ONLY valid JSON matching this schema:
 {
   "supplier_name": "Full legal or trading business name",
-  "supplier_abn": "11 digit Australian ABN without spaces, or null",
-  "invoice_number": "Invoice, account or bill reference number",
+  "supplier_abn": "11 digit Australian ABN without spaces, or null if international / not present",
+  "invoice_number": "Explicit invoice or bill number",
   "invoice_date": "YYYY-MM-DD or null",
   "due_date": "YYYY-MM-DD or null",
   "currency": "AUD" | "USD" | "GBP" | "EUR" | "NZD" | "CAD",
-  "bsb": "XXX-XXX or null",
-  "bank_account_number": "Digits only or null",
-  "bank_account_name": "Account title or null",
   "is_tax_invoice": true,
   "gst_inclusive": true,
   "subtotal_ex_gst": 0.00,
@@ -107,7 +108,7 @@ def capture_document(path: Path) -> dict[str, Any]:
 
 def find_abn_candidates(text: str) -> list[str]:
     cands = []
-    for m in re.finditer(r"(?:ABN|A\.B\.N\.?)\s*[:|.\s]*([0-9\s]{11,18})", text, re.IGNORECASE):
+    for m in re.finditer(r"(?:ABN|A\.B\.N\.?)[:|.\s]*([0-9\s]{11,18})", text, re.IGNORECASE):
         clean = digits_only(m.group(1))
         if len(clean) == 11 and clean not in cands:
             cands.append(clean)
@@ -118,24 +119,55 @@ def find_abn_candidates(text: str) -> list[str]:
     return cands
 
 
-def find_bank_candidates(text: str) -> tuple[str | None, str | None]:
-    """Deterministic regex extraction for Australian EFT BSB and Account numbers."""
-    bsb = None
-    account = None
+def find_invoice_number_candidates(text: str) -> list[str]:
+    """
+    Layout-agnostic candidate finder:
+    Handles same-line label/values, table cells, and two-row stacked layouts.
+    """
+    candidates: list[str] = []
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    
+    label_patterns = [
+        r"^tax\s*invoice\s*(?:no\.?|number|#)?$",
+        r"^invoice\s*(?:no\.?|number|#)?$",
+        r"^bill\s*(?:no\.?|number|#)?$",
+        r"^inv\s*(?:no\.?|#)?$",
+    ]
+    stopwords = {
+        "date", "issue", "due", "total", "amount", "tax", "gst", "statement", 
+        "summary", "details", "page", "period", "charges", "slip", "nab", "cba"
+    }
 
-    # Matches BSB: 123-456 or BSB 123 456 or BSB: 123456
-    m_bsb = re.search(r"\bBSB\s*[:.\s-]*([0-9]{3}[\s-]*[0-9]{3})\b", text, re.IGNORECASE)
-    if m_bsb:
-        d = re.sub(r"\D", "", m_bsb.group(1))
-        if len(d) == 6:
-            bsb = f"{d[:3]}-{d[3:]}"
+    for i, line in enumerate(lines):
+        line_clean = line.strip()
+        
+        # 1. Inline match (e.g. "Invoice No: 0986410726" or "Invoice # 44021")
+        m_inline = re.search(
+            r"(?i)(?:Invoice\s*(?:No\.?|Number|#)|Tax\s*Invoice\s*(?:No\.?|#)|Bill\s*(?:Number|No\.?|#))\s*[:.\s#]*([A-Z0-9\-_/]{3,})",
+            line_clean
+        )
+        if m_inline:
+            val = m_inline.group(1).strip()
+            if val.lower() not in stopwords and any(c.isdigit() for c in val):
+                candidates.append(val)
 
-    # Matches Account / ACC / Account No: 123456789
-    m_acc = re.search(r"\b(?:Account|Acc|A/C)(?:\s*(?:No|Number|#))?\s*[:.\s-]*([0-9]{5,10})\b", text, re.IGNORECASE)
-    if m_acc:
-        account = m_acc.group(1).strip()
+        # 2. Stacked layout match (Label on line i, token on line i+1)
+        for pat in label_patterns:
+            if re.match(pat, line_clean, re.IGNORECASE):
+                if i + 1 < len(lines):
+                    next_token = lines[i + 1].strip()
+                    # Verify next token looks like an identifier rather than a word or date
+                    if (
+                        len(next_token) >= 3 
+                        and next_token.lower() not in stopwords 
+                        and any(c.isdigit() for c in next_token)
+                        and not re.search(r"[/.-]\d{2,4}$", next_token) # Avoid dates like 05/08/26
+                        and not next_token.startswith("$")
+                    ):
+                        candidates.append(next_token)
 
-    return bsb, account
+    # Deduplicate while preserving order
+    return list(dict.fromkeys(candidates))
 
 
 def find_total_candidates(text: str) -> tuple[Decimal | None, Decimal | None]:
@@ -183,7 +215,6 @@ def regex_fallback_extract(text: str) -> dict[str, Any]:
 
     abns = find_abn_candidates(text)
     abn = abns[0] if abns else ""
-    bsb, acc = find_bank_candidates(text)
 
     m_inv = re.search(r"(?:Invoice\s*Date|Issued\s*on|Date|Bill\s*Date)\s*[:\s]*([0-9A-Za-z\s\/\-\.]+)", text, re.I)
     inv_date = parse_date(m_inv.group(1)) if m_inv else None
@@ -191,8 +222,12 @@ def regex_fallback_extract(text: str) -> dict[str, Any]:
     m_due = re.search(r"(?:Payment\s*Due\s*Date|Due\s*Date|Pay\s*by\s*date|Due|Pay\s*by)\s*[:\s]*([0-9A-Za-z\s\/\-\.]+)", text, re.I)
     due = parse_date(m_due.group(1)) if m_due else None
 
-    m_no = re.search(r"(?:Invoice\s*(?:number|no\.?|#)|Bill\s*Number|Account\s*(?:Number|No\.?))\s*[:\s]*([A-Z0-9\-]+)", text, re.I)
-    inv_no = m_no.group(1) if m_no else ""
+    inv_candidates = find_invoice_number_candidates(text)
+    if inv_candidates:
+        inv_no = inv_candidates[0]
+    else:
+        m_acc = re.search(r"(?:Account\s*(?:Number|No\.?|#))\s*[:.\s#]*([A-Z0-9\-_/]+)", text, re.I)
+        inv_no = m_acc.group(1).strip() if m_acc else ""
 
     tot, gst_val = find_total_candidates(text)
     total = tot or Decimal("0.00")
@@ -211,9 +246,6 @@ def regex_fallback_extract(text: str) -> dict[str, Any]:
         "invoice_date": inv_date.isoformat() if inv_date else None,
         "due_date": due.isoformat() if due else None,
         "currency": "AUD",
-        "bsb": bsb,
-        "bank_account_number": acc,
-        "bank_account_name": supplier[:32] if supplier else None,
         "is_tax_invoice": True,
         "gst_inclusive": True,
         "subtotal_ex_gst": sub,
@@ -237,18 +269,18 @@ def run_hybrid_extract(
     b64_image: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     abns = find_abn_candidates(text)
+    inv_candidates = find_invoice_number_candidates(text)
     reg_tot, reg_gst = find_total_candidates(text)
-    reg_bsb, reg_acc = find_bank_candidates(text)
 
     hints = []
     if abns:
         hints.append(f"Detected ABN candidates: {', '.join(abns)}")
+    if inv_candidates:
+        hints.append(f"Detected Invoice Number Candidates: {', '.join(inv_candidates)}")
     if reg_tot:
         hints.append(f"Detected Gross Total: ${reg_tot:.2f}")
     if reg_gst:
         hints.append(f"Detected GST Amount: ${reg_gst:.2f}")
-    if reg_bsb:
-        hints.append(f"Detected Remittance BSB: {reg_bsb}, Account: {reg_acc or 'None'}")
 
     hint_str = f"\n[Document Hints: {'; '.join(hints)}]" if hints else ""
 
@@ -256,12 +288,12 @@ def run_hybrid_extract(
 
     if not text.strip() and b64_image:
         chosen_model = model or pick_model(available, prefer_vision=True) or "qwen2.5-vl:latest"
-        user_prompt = "Extract all invoice details, tax totals, and remittance bank details from this scanned image."
+        user_prompt = "Extract all invoice details and tax totals from this scanned image."
         images = [b64_image]
     else:
         chosen_model = model or pick_model(available, prefer_vision=False) or "qwen2.5:3b"
         user_prompt = (
-            f"Extract all invoice details and payment remittance bank details from this document text.{hint_str}\n\n"
+            f"Extract all invoice details from this document text.{hint_str}\n\n"
             f"--- DOCUMENT TEXT ---\n{text[:2500]}"
         )
         images = None
@@ -313,18 +345,6 @@ def normalize_extracted(data: dict[str, Any], raw_text: str) -> dict[str, Any]:
     if sub == 0 or sub == total:
         sub = total - gst
 
-    # Clean extracted BSB
-    raw_bsb = str(data.get("bsb") or "")
-    clean_b = re.sub(r"\D", "", raw_bsb)
-    final_bsb = f"{clean_b[:3]}-{clean_b[3:]}" if len(clean_b) == 6 else None
-
-    # Fallback to regex BSB if AI missed it
-    reg_bsb, reg_acc = find_bank_candidates(raw_text)
-    if not final_bsb and reg_bsb:
-        final_bsb = reg_bsb
-
-    acc_num = re.sub(r"\D", "", str(data.get("bank_account_number") or "")) or reg_acc or None
-
     raw_lines = data.get("line_items") or data.get("lines") or []
     norm_lines = []
     for ln in raw_lines:
@@ -334,7 +354,7 @@ def normalize_extracted(data: dict[str, Any], raw_text: str) -> dict[str, Any]:
         amt = money(ln.get("amount") or ln.get("total") or 0)
         if not desc and amt == 0:
             continue
-        ln_gst = money(ln.get("gst_amount") or (Decimal("0.00") if is_water_or_rates else gst_from_inclusive(amt)))
+        ln_gst = gst if (len(raw_lines) <= 1 and gst > 0) else money(ln.get("gst_amount") or (Decimal("0.00") if is_water_or_rates else gst_from_inclusive(amt)))
         norm_lines.append({
             "description": desc or "Item",
             "amount": amt,
@@ -349,15 +369,29 @@ def normalize_extracted(data: dict[str, Any], raw_text: str) -> dict[str, Any]:
             "gst_amount": gst,
             "gst_treatment": "gst_free" if is_water_or_rates else "taxable",
         }]
+    elif len(norm_lines) == 1 and norm_lines[0]["amount"] != total:
+        if abs((norm_lines[0]["amount"] + gst) - total) <= Decimal("0.05"):
+            norm_lines[0]["amount"] = total
+            norm_lines[0]["gst_amount"] = gst
+
+    # Disambiguate Invoice Number vs Account Number
+    inv_candidates = find_invoice_number_candidates(raw_text)
+    ai_inv_no = str(data.get("invoice_number") or "").strip()
+
+    if inv_candidates:
+        # If AI picked an Account Number while explicit invoice candidates exist, promote candidate #1
+        if not ai_inv_no or (ai_inv_no not in inv_candidates and re.search(r"Account\s*(?:No|Number)?\s*[:.\s#]*" + re.escape(ai_inv_no), raw_text, re.I)):
+            final_inv_no = inv_candidates[0]
+        else:
+            final_inv_no = ai_inv_no
+    else:
+        final_inv_no = ai_inv_no
 
     return {
         "supplier_name": str(data.get("supplier_name") or "").strip(),
         "supplier_abn": abn,
         "abn_valid": is_valid_abn(abn) if abn else False,
-        "bsb": final_bsb,
-        "bank_account_number": acc_num,
-        "bank_account_name": str(data.get("bank_account_name") or "").strip() or None,
-        "invoice_number": str(data.get("invoice_number") or "").strip(),
+        "invoice_number": final_inv_no,
         "invoice_date": parse_date(data.get("invoice_date")),
         "due_date": parse_date(data.get("due_date")),
         "currency": data.get("currency") or "AUD",

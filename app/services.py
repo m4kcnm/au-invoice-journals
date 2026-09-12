@@ -64,9 +64,8 @@ def log_creditor_audit(
     new_acc: str | None = None,
     details: str = "",
 ) -> None:
-    """Logs immutable audit events whenever creditor bank details or payment profiles change."""
     user_id = getattr(user, "id", None) if user else None
-    username = getattr(user, "username", "System / AI") if user else "System / AI"
+    username = getattr(user, "username", "System") if user else "System"
     session.add(
         CreditorAuditLog(
             creditor_id=creditor_id,
@@ -82,90 +81,31 @@ def log_creditor_audit(
     )
 
 
-def upsert_creditor(session, name: str, abn: str, bsb: str | None = None, account_num: str | None = None, account_name: str | None = None, user=None, invoice_ref: str = "") -> Creditor | None:
+def upsert_creditor(session, name: str, abn: str) -> Creditor | None:
     name = (name or "").strip()
     abn_clean = digits_only(abn)
 
-    creditor: Creditor | None = None
-
-    # 1. Prioritize lookup by 11-digit ABN
     if len(abn_clean) == 11:
         all_creditors = session.query(Creditor).filter(Creditor.abn.isnot(None)).all()
         for c in all_creditors:
             if digits_only(c.abn) == abn_clean:
-                creditor = c
                 if name and (len(c.name) < len(name) or c.name.lower() in name.lower()):
                     c.name = name
-                break
+                return c
 
-    # 2. Fall back to name lookup
-    if not creditor and len(name) >= 3:
-        creditor = session.query(Creditor).filter(Creditor.name.ilike(name)).first()
-        if creditor and abn_clean and not creditor.abn:
-            creditor.abn = abn_clean
+    if len(name) >= 3:
+        row = session.query(Creditor).filter(Creditor.name.ilike(name)).first()
+        if row:
+            if abn_clean and not row.abn:
+                row.abn = abn_clean
+            return row
 
-    # 3. If new, create creditor record with initial bank details
-    if not creditor:
-        if not name:
-            return None
-        creditor = Creditor(
-            name=name,
-            abn=abn_clean or "",
-            bsb=bsb,
-            bank_account_number=account_num,
-            bank_account_name=account_name or name,
-        )
-        session.add(creditor)
+        row = Creditor(name=name, abn=abn_clean or "")
+        session.add(row)
         session.flush()
+        return row
 
-        if bsb or account_num:
-            log_creditor_audit(
-                session,
-                creditor_id=creditor.id,
-                action="INITIAL_BANK_CAPTURE",
-                user=user,
-                old_bsb=None,
-                new_bsb=bsb,
-                old_acc=None,
-                new_acc=account_num,
-                details=f"Captured initial EFT details from {invoice_ref or 'document'}.",
-            )
-        return creditor
-
-    # 4. If existing creditor, only populate bank details if NONE exist (Immutability Protection)
-    if (not creditor.bsb and not creditor.bank_account_number) and (bsb or account_num):
-        old_b, old_a = creditor.bsb, creditor.bank_account_number
-        creditor.bsb = bsb
-        creditor.bank_account_number = account_num
-        if account_name and not creditor.bank_account_name:
-            creditor.bank_account_name = account_name
-
-        log_creditor_audit(
-            session,
-            creditor_id=creditor.id,
-            action="AUTO_FILLED_BANK_DETAILS",
-            user=user,
-            old_bsb=old_b,
-            new_bsb=bsb,
-            old_acc=old_a,
-            new_acc=account_num,
-            details=f"Auto-populated missing bank details from {invoice_ref or 'incoming bill'}.",
-        )
-    elif (creditor.bsb or creditor.bank_account_number) and (bsb and creditor.bsb != bsb or account_num and creditor.bank_account_number != account_num):
-        # Fraud prevention warning: invoice bank details differ from verified records
-        log_creditor_audit(
-            session,
-            creditor_id=creditor.id,
-            action="BANK_MISMATCH_DETECTED",
-            user=user,
-            old_bsb=creditor.bsb,
-            new_bsb=bsb,
-            old_acc=creditor.bank_account_number,
-            new_acc=account_num,
-            details=f"Warning: {invoice_ref or 'Incoming bill'} showed different bank details ({bsb} / {account_num}). Existing records were retained.",
-        )
-
-    return creditor
+    return None
 
 
 def ingest_pdf(src: Path, original_name: str | None = None, user=None) -> Invoice:
@@ -220,29 +160,26 @@ def extract_invoice(invoice_id: int) -> None:
 
         extracted_abn = digits_only(norm.get("supplier_abn") or "")
         extracted_name = (norm.get("supplier_name") or "").strip()
-        extracted_bsb = norm.get("bsb")
-        extracted_acc = norm.get("bank_account_number")
-        extracted_acc_name = norm.get("bank_account_name")
 
-        # Resolve or upsert creditor, populating bank details if currently missing
-        cred = upsert_creditor(
-            session,
-            name=extracted_name,
-            abn=extracted_abn,
-            bsb=extracted_bsb,
-            account_num=extracted_acc,
-            account_name=extracted_acc_name,
-            user=None,
-            invoice_ref=f"Invoice #{norm.get('invoice_number') or inv.id} ({inv.filename})",
-        )
+        matched_creditor = None
+        if len(extracted_abn) == 11:
+            for c in session.query(Creditor).filter(Creditor.abn.isnot(None)).all():
+                if digits_only(c.abn) == extracted_abn:
+                    matched_creditor = c
+                    break
 
-        if cred:
-            inv.creditor_id = cred.id
-            inv.supplier_name = cred.name
-            if cred.invoice_type_id:
-                inv.invoice_type_id = cred.invoice_type_id
+        if matched_creditor:
+            inv.supplier_name = matched_creditor.name
+            inv.creditor_id = matched_creditor.id
+            if matched_creditor.invoice_type_id:
+                inv.invoice_type_id = matched_creditor.invoice_type_id
         else:
             inv.supplier_name = extracted_name
+            cred = upsert_creditor(session, inv.supplier_name, extracted_abn)
+            if cred:
+                inv.creditor_id = cred.id
+                if cred.invoice_type_id:
+                    inv.invoice_type_id = cred.invoice_type_id
 
         inv.raw_text = raw_text
         inv.supplier_abn = extracted_abn
@@ -272,8 +209,7 @@ def extract_invoice(invoice_id: int) -> None:
             )
 
         inv.status = "extracted"
-        bank_info_str = f" [EFT: {extracted_bsb} / {extracted_acc}]" if (extracted_bsb and extracted_acc) else ""
-        log_audit_event(session, "EXTRACTED", invoice_id=inv.id, details=f"Extracted via {method_used}{bank_info_str}")
+        log_audit_event(session, "EXTRACTED", invoice_id=inv.id, details=f"Extracted via {method_used}")
         session.commit()
     except Exception as e:
         session.rollback()
@@ -304,7 +240,7 @@ def apply_invoice_form(invoice_id: int, form: dict, user=None) -> None:
         itype = form.get("invoice_type_id") or ""
         inv.invoice_type_id = int(itype) if itype else None
 
-        cred = upsert_creditor(session, inv.supplier_name, inv.supplier_abn, user=user)
+        cred = upsert_creditor(session, inv.supplier_name, inv.supplier_abn)
         inv.creditor_id = cred.id if cred else None
 
         for ln in list(inv.lines):

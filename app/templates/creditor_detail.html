@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}{{ c.name }} — Creditor Details{% endblock %}
+{% block body %}
+<div class="page-header">
+  <div>
+    <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.2rem;">
+      <a href="/creditors" style="color: var(--accent-blue); text-decoration: none;">Creditors</a> &rsaquo; {{ c.name }}
+    </div>
+    <h2>{{ c.name }}</h2>
+    <div class="page-subtitle">Vendor profile, verified EFT disbursement details, invoice ledger, and bank change audit trail.</div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <article class="card stack">
+    <header>
+      <h3>Vendor Profile & Banking Details</h3>
+      <span class="muted">All modifications write to audit trail</span>
+    </header>
+    <form action="/creditors/{{ c.id }}/update" method="post" class="stack">
+      <label>Vendor Legal / Trading Name
+        <input name="name" value="{{ c.name }}" required />
+      </label>
+      <label>Australian Business Number (ABN)
+        <input name="abn" value="{{ c.abn or '' }}" placeholder="11 Digits" />
+      </label>
+
+      <h4 style="margin-top: 0.5rem; margin-bottom: 0.2rem;">EFT Remittance (ABA Cemtext)</h4>
+      <div class="row3">
+        <label>BSB Number
+          <input name="bsb" value="{{ c.bsb or '' }}" placeholder="XXX-XXX" />
+        </label>
+        <label>Bank Account Number
+          <input name="bank_account_number" value="{{ c.bank_account_number or '' }}" placeholder="e.g. 12345678" />
+        </label>
+        <label>Account Name / Title
+          <input name="bank_account_name" value="{{ c.bank_account_name or '' }}" placeholder="e.g. Origin Energy Ltd" />
+        </label>
+      </div>
+
+      <h4 style="margin-top: 0.5rem; margin-bottom: 0.2rem;">Accounting & Expense Defaults</h4>
+      <div class="row2">
+        <label>Default General Ledger Account
+          <select name="default_account_id">
+            <option value="">— None —</option>
+            {% for a in accounts %}
+            <option value="{{ a.id }}" {% if c.default_account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Default Tax Treatment
+          <select name="gst_treatment">
+            {% for t in treatments %}
+            <option value="{{ t }}" {% if c.gst_treatment == t %}selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <label>Default Expense Category
+        <select name="invoice_type_id">
+          <option value="">— None —</option>
+          {% for t in types %}
+          <option value="{{ t.id }}" {% if c.invoice_type_id == t.id %}selected{% endif %}>{{ t.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="btn primary" type="submit" style="align-self: flex-start; margin-top: 0.5rem;">Save Creditor Details</button>
+    </form>
+  </article>
+
+  <article class="card">
+    <header>
+      <h3>Banking & Profile Change Log</h3>
+      <span class="muted">{{ c.audit_logs|length }} events</span>
+    </header>
+    <div class="table-responsive">
+      <table class="wide" style="font-size: 0.8rem;">
+        <thead>
+          <tr>
+            <th style="width: 140px;">Timestamp</th>
+            <th style="width: 90px;">User</th>
+            <th style="width: 120px;">Action</th>
+            <th>Details & Transition</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for l in c.audit_logs %}
+          <tr>
+            <td class="muted">{{ l.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td><strong>{{ l.username }}</strong></td>
+            <td><span class="tag reviewed">{{ l.action }}</span></td>
+            <td>
+              {% if l.old_bsb or l.new_bsb or l.old_account or l.new_account %}
+                <code>{{ l.old_bsb or 'None' }} / {{ l.old_account or 'None' }}</code> &rarr; <code>{{ l.new_bsb or 'None' }} / {{ l.new_account or 'None' }}</code><br />
+              {% endif %}
+              <span class="muted">{{ l.details }}</span>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="muted" style="text-align: center; padding: 1.5rem;">No bank alterations recorded.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</div>
+
+<article class="card tight" style="margin-top: 1.5rem;">
+  <header>
+    <h3>Invoice & Billing History</h3>
+    <span class="muted">{{ invoices|length }} total bills</span>
+  </header>
+  <div class="table-responsive">
+    <table class="wide">
+      <thead>
+        <tr>
+          <th style="width: 70px;">ID</th>
+          <th style="width: 110px;">Date</th>
+          <th style="width: 140px;">Invoice #</th>
+          <th style="width: 110px; text-align: right;">GST (1B)</th>
+          <th style="width: 120px; text-align: right;">Total</th>
+          <th style="width: 110px; text-align: center;">Status</th>
+          <th style="width: 90px; text-align: right;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in invoices %}
+        <tr>
+          <td><a href="/invoices/{{ inv.id }}"><strong>#{{ inv.id }}</strong></a></td>
+          <td>{{ inv.invoice_date or "—" }}</td>
+          <td>{{ inv.invoice_number or "—" }}</td>
+          <td style="text-align: right;">{{ inv.gst_amount | aud }}</td>
+          <td style="text-align: right;"><strong>{{ inv.total | aud }}</strong></td>
+          <td style="text-align: center;"><span class="tag {{ inv.status }}">{{ inv.status }}</span></td>
+          <td style="text-align: right;"><a class="btn" href="/invoices/{{ inv.id }}" style="font-size: 0.75rem; padding: 0.2rem 0.5rem;">View</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="muted" style="text-align: center; padding: 1.5rem;">No bills on record for this creditor yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+{% endblock %}

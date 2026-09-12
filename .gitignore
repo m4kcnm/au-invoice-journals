@@ -1,21 +1,31 @@
-# Python Virtual Environments & Bytecode
-.venv/
-venv/
+# Environments & Bytecode
 __pycache__/
 *.py[cod]
 *$py.class
+.venv/
+env/
+venv/
+ENV/
 
-# Local Databases & Invoices (Confidential / State Data)
+# Application Data & Private Stores
 data/
+inbox/
 *.db
-*.sqlite
-*.sqlite3
-*.pdf
+*.db-journal
+*.db-wal
+*.db-shm
+*.sql
 
-# Operating System & Diagnostic Dumps
+# System & OS
 .DS_Store
-codebase_dump.txt
-*.log
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# Local Environment Variables
+# Secrets & Environment Overrides
 .env
+*.local
+codebase_dump.txt

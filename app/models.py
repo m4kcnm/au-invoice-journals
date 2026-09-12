@@ -22,7 +22,7 @@ ENGINE = create_engine(
 def set_sqlite_pragma(dbapi_connection, connection_record):
     if isinstance(dbapi_connection, sqlite3.Connection):
         cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA journal_mode=DELETE")
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
@@ -130,7 +130,6 @@ class Creditor(Base):
     invoice_type_id = Column(Integer, ForeignKey("invoice_types.id"), nullable=True)
     notes = Column(Text, default="")
 
-    # Banking details for Australian direct entry (ABA)
     bsb = Column(String(7), nullable=True)
     bank_account_number = Column(String(10), nullable=True)
     bank_account_name = Column(String(32), nullable=True)
@@ -138,6 +137,7 @@ class Creditor(Base):
     default_account = relationship("Account")
     invoice_type = relationship("InvoiceType")
     audit_logs = relationship("CreditorAuditLog", back_populates="creditor", order_by="CreditorAuditLog.timestamp.desc()", cascade="all, delete-orphan")
+    invoices = relationship("Invoice", back_populates="creditor")
 
 
 class MappingRule(Base):
@@ -186,7 +186,7 @@ class Invoice(Base):
     creditor_id = Column(Integer, ForeignKey("creditors.id"), nullable=True)
     invoice_type_id = Column(Integer, ForeignKey("invoice_types.id"), nullable=True)
 
-    creditor = relationship("Creditor")
+    creditor = relationship("Creditor", back_populates="invoices")
     invoice_type = relationship("InvoiceType")
     lines = relationship("InvoiceLine", back_populates="invoice", cascade="all, delete-orphan")
     journals = relationship("Journal", back_populates="invoice", cascade="all, delete-orphan")

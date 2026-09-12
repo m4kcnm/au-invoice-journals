@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.aba import clean_bsb, generate_aba_file
-from app.abn import format_abn, is_valid_abn
+from app.abn import digits_only, format_abn, is_valid_abn
 from app.auth import (
     SESSION_COOKIE_NAME,
     create_session_token,
@@ -32,6 +32,7 @@ from app.models import (
     Account,
     AuditLog,
     Creditor,
+    CreditorAuditLog,
     Invoice,
     InvoiceType,
     Journal,
@@ -46,7 +47,15 @@ from app.ollama_client import list_models, ping
 from app.sample import write_sample_invoice
 from app.search import execute_invoice_search, parse_natural_query
 from app.seed import seed_if_empty
-from app.services import apply_invoice_form, log_creditor_audit, archive_posted_invoice, extract_invoice, ingest_inbox, ingest_pdf, log_audit_event
+from app.services import (
+    apply_invoice_form,
+    archive_posted_invoice,
+    extract_invoice,
+    ingest_inbox,
+    ingest_pdf,
+    log_audit_event,
+    log_creditor_audit,
+)
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["abn"] = lambda v: format_abn(v) if v else ""
@@ -230,7 +239,6 @@ def invoices_list(request: Request, user: User = Depends(get_current_user)):
 
 @app.get("/payments/aba")
 def download_aba_file(user: User = Depends(require_approver)):
-    """Exports all POSTED (approved) invoices as a Cemtext Direct Credit batch."""
     session = SessionLocal()
     try:
         invoices = (
@@ -240,11 +248,11 @@ def download_aba_file(user: User = Depends(require_approver)):
             .all()
         )
 
-        bank_code = get_setting(session, "bank_code", "WBC")
+        bank_code = get_setting(session, "bank_code", "PCU")
         user_name = get_setting(session, "entity_name", "My Australian Business")
-        apca = get_setting(session, "user_apca_number", "000000")
-        bsb = get_setting(session, "remitter_bsb", "000-000")
-        acc = get_setting(session, "remitter_account", "00000000")
+        apca = get_setting(session, "user_apca_number", "123456")
+        bsb = get_setting(session, "remitter_bsb", "085-005")
+        acc = get_setting(session, "remitter_account", "123456789")
 
         aba_content = generate_aba_file(
             invoices,
@@ -275,6 +283,7 @@ def invoice_detail(request: Request, invoice_id: int, error: str = "", user: Use
 
         accounts = session.query(Account).filter_by(archived=False).order_by(Account.code).all()
         types = session.query(InvoiceType).order_by(InvoiceType.name).all()
+        creditor = session.get(Creditor, inv.creditor_id) if inv.creditor_id else None
 
         duplicate_invoice = None
         if inv.supplier_abn and inv.invoice_number:
@@ -314,6 +323,7 @@ def invoice_detail(request: Request, invoice_id: int, error: str = "", user: Use
             ctx(
                 request,
                 inv=inv,
+                creditor=creditor,
                 accounts=accounts,
                 types=types,
                 preview=preview,
@@ -497,6 +507,206 @@ def invoice_delete(invoice_id: int, user: User = Depends(require_approver)):
     return RedirectResponse("/invoices?toast=deleted", status_code=303)
 
 
+# --- DEDICATED CREDITORS HUB ROUTES ---
+@app.get("/creditors", response_class=HTMLResponse)
+def creditors_list(request: Request, user: User = Depends(get_current_user)):
+    session = SessionLocal()
+    try:
+        return TEMPLATES.TemplateResponse(
+            "creditors.html",
+            ctx(
+                request,
+                creditors=session.query(Creditor).order_by(Creditor.name).all(),
+                types=session.query(InvoiceType).order_by(InvoiceType.name).all(),
+                accounts=session.query(Account).filter_by(archived=False).order_by(Account.code).all(),
+            ),
+        )
+    finally:
+        session.close()
+
+
+@app.get("/creditors/{creditor_id}", response_class=HTMLResponse)
+def creditor_detail(request: Request, creditor_id: int, user: User = Depends(get_current_user)):
+    session = SessionLocal()
+    try:
+        c = session.get(Creditor, creditor_id)
+        if not c:
+            return RedirectResponse("/creditors", status_code=303)
+        invoices = session.query(Invoice).filter_by(creditor_id=creditor_id).order_by(Invoice.id.desc()).all()
+        accounts = session.query(Account).filter_by(archived=False).order_by(Account.code).all()
+        types = session.query(InvoiceType).order_by(InvoiceType.name).all()
+        return TEMPLATES.TemplateResponse(
+            "creditor_detail.html",
+            ctx(
+                request,
+                c=c,
+                invoices=invoices,
+                accounts=accounts,
+                types=types,
+            ),
+        )
+    finally:
+        session.close()
+
+
+@app.post("/creditors/new")
+def create_creditor(
+    name: str = Form(...),
+    abn: str = Form(""),
+    default_account_id: str = Form(""),
+    gst_treatment: str = Form("taxable"),
+    invoice_type_id: str = Form(""),
+    bsb: str = Form(""),
+    bank_account_number: str = Form(""),
+    bank_account_name: str = Form(""),
+    notes: str = Form(""),
+    user: User = Depends(require_approver),
+):
+    session = SessionLocal()
+    try:
+        clean_b = clean_bsb(bsb) if bsb else None
+        clean_acc = bank_account_number.strip() if bank_account_number else None
+
+        cred = Creditor(
+            name=name.strip(),
+            abn=digits_only(abn),
+            default_account_id=int(default_account_id) if default_account_id else None,
+            gst_treatment=gst_treatment,
+            invoice_type_id=int(invoice_type_id) if invoice_type_id else None,
+            bsb=clean_b,
+            bank_account_number=clean_acc,
+            bank_account_name=bank_account_name.strip() if bank_account_name else None,
+            notes=notes.strip(),
+        )
+        session.add(cred)
+        session.flush()
+
+        if clean_b or clean_acc:
+            log_creditor_audit(
+                session,
+                creditor_id=cred.id,
+                action="INITIAL_BANK_SETUP",
+                user=user,
+                old_bsb=None,
+                new_bsb=clean_b,
+                old_acc=None,
+                new_acc=clean_acc,
+                details=f"Creditor profile registered by {user.username}.",
+            )
+        session.commit()
+    finally:
+        session.close()
+    return RedirectResponse("/creditors", status_code=303)
+
+
+@app.post("/creditors/{creditor_id}/update")
+def update_creditor(
+    creditor_id: int,
+    name: str = Form(...),
+    abn: str = Form(""),
+    default_account_id: str = Form(""),
+    gst_treatment: str = Form("taxable"),
+    invoice_type_id: str = Form(""),
+    bsb: str = Form(""),
+    bank_account_number: str = Form(""),
+    bank_account_name: str = Form(""),
+    user: User = Depends(require_approver),
+):
+    session = SessionLocal()
+    try:
+        c = session.get(Creditor, creditor_id)
+        if c:
+            new_clean_bsb = clean_bsb(bsb) if bsb else None
+            new_clean_acc = bank_account_number.strip() if bank_account_number else None
+
+            if c.bsb != new_clean_bsb or c.bank_account_number != new_clean_acc:
+                log_creditor_audit(
+                    session,
+                    creditor_id=c.id,
+                    action="MANUAL_BANK_UPDATE",
+                    user=user,
+                    old_bsb=c.bsb,
+                    new_bsb=new_clean_bsb,
+                    old_acc=c.bank_account_number,
+                    new_acc=new_clean_acc,
+                    details=f"Disbursement banking updated by approver {user.username}.",
+                )
+
+            c.name = name.strip()
+            c.abn = digits_only(abn)
+            c.default_account_id = int(default_account_id) if default_account_id else None
+            c.gst_treatment = gst_treatment
+            c.invoice_type_id = int(invoice_type_id) if invoice_type_id else None
+            c.bsb = new_clean_bsb
+            c.bank_account_number = new_clean_acc
+            c.bank_account_name = bank_account_name.strip() if bank_account_name else None
+            session.commit()
+    finally:
+        session.close()
+    return RedirectResponse(f"/creditors/{creditor_id}", status_code=303)
+
+
+@app.post("/creditors/{creditor_id}/delete")
+def delete_creditor(creditor_id: int, user: User = Depends(require_approver)):
+    session = SessionLocal()
+    try:
+        c = session.get(Creditor, creditor_id)
+        if c:
+            for inv in session.query(Invoice).filter_by(creditor_id=creditor_id):
+                inv.creditor_id = None
+            session.delete(c)
+            session.commit()
+    finally:
+        session.close()
+    return RedirectResponse("/creditors", status_code=303)
+
+
+# --- CENTRAL AUDIT LOG ROUTE ---
+@app.get("/audit", response_class=HTMLResponse)
+def audit_page(request: Request, user: User = Depends(get_current_user)):
+    session = SessionLocal()
+    try:
+        inv_logs = session.query(AuditLog).all()
+        cred_logs = session.query(CreditorAuditLog).all()
+
+        combined = []
+        for l in inv_logs:
+            combined.append({
+                "timestamp": l.timestamp,
+                "domain": "Invoice",
+                "username": l.username,
+                "action": l.action,
+                "entity_id": l.invoice_id,
+                "entity_title": f"Invoice #{l.invoice.invoice_number or l.invoice_id}" if l.invoice else "Bill",
+                "diff": None,
+                "details": l.details,
+            })
+
+        for l in cred_logs:
+            diff_str = None
+            if l.old_bsb or l.new_bsb or l.old_account or l.new_account:
+                diff_str = f"{l.old_bsb or 'None'}/{l.old_account or 'None'} → {l.new_bsb or 'None'}/{l.new_account or 'None'}"
+            combined.append({
+                "timestamp": l.timestamp,
+                "domain": "Creditor",
+                "username": l.username,
+                "action": l.action,
+                "entity_id": l.creditor_id,
+                "entity_title": l.creditor.name if l.creditor else "Creditor",
+                "diff": diff_str,
+                "details": l.details,
+            })
+
+        combined.sort(key=lambda x: x["timestamp"], reverse=True)
+
+        return TEMPLATES.TemplateResponse(
+            "audit.html",
+            ctx(request, all_events=combined),
+        )
+    finally:
+        session.close()
+
+
 @app.get("/search", response_class=HTMLResponse)
 def search_page(request: Request, user: User = Depends(get_current_user)):
     return TEMPLATES.TemplateResponse("search.html", ctx(request))
@@ -541,7 +751,6 @@ def mapping(request: Request, user: User = Depends(get_current_user)):
             "mapping.html",
             ctx(
                 request,
-                creditors=session.query(Creditor).order_by(Creditor.name).all(),
                 types=session.query(InvoiceType).order_by(InvoiceType.name).all(),
                 rules=session.query(MappingRule).order_by(MappingRule.priority).all(),
                 accounts=session.query(Account).filter_by(archived=False).order_by(Account.code).all(),
@@ -549,101 +758,6 @@ def mapping(request: Request, user: User = Depends(get_current_user)):
         )
     finally:
         session.close()
-
-
-@app.post("/mapping/creditor/{creditor_id}")
-def save_creditor(
-    creditor_id: int,
-    default_account_id: str = Form(""),
-    gst_treatment: str = Form("taxable"),
-    invoice_type_id: str = Form(""),
-    bsb: str = Form(""),
-    bank_account_number: str = Form(""),
-    bank_account_name: str = Form(""),
-    notes: str = Form(""),
-    user: User = Depends(require_approver),
-):
-    session = SessionLocal()
-    try:
-        c = session.get(Creditor, creditor_id)
-        if c:
-            new_clean_bsb = clean_bsb(bsb) if bsb else None
-            new_clean_acc = bank_account_number.strip() if bank_account_number else None
-            
-            # Audit log if bank details were altered
-            if c.bsb != new_clean_bsb or c.bank_account_number != new_clean_acc:
-                log_creditor_audit(
-                    session,
-                    creditor_id=c.id,
-                    action="MANUAL_BANK_UPDATE",
-                    user=user,
-                    old_bsb=c.bsb,
-                    new_bsb=new_clean_bsb,
-                    old_acc=c.bank_account_number,
-                    new_acc=new_clean_acc,
-                    details=f"Manual update by approver {user.username} in Mapping Studio.",
-                )
-
-            c.default_account_id = int(default_account_id) if default_account_id else None
-            c.gst_treatment = gst_treatment
-            c.invoice_type_id = int(invoice_type_id) if invoice_type_id else None
-            c.bsb = new_clean_bsb
-            c.bank_account_number = new_clean_acc
-            c.bank_account_name = bank_account_name.strip() if bank_account_name else None
-            c.notes = notes.strip()
-            session.commit()
-    finally:
-        session.close()
-    return RedirectResponse("/mapping#creditors", status_code=303)
-
-
-@app.post("/mapping/creditors/new")
-def create_creditor(
-    name: str = Form(...),
-    abn: str = Form(""),
-    default_account_id: str = Form(""),
-    gst_treatment: str = Form("taxable"),
-    invoice_type_id: str = Form(""),
-    bsb: str = Form(""),
-    bank_account_number: str = Form(""),
-    bank_account_name: str = Form(""),
-    notes: str = Form(""),
-    user: User = Depends(require_approver),
-):
-    session = SessionLocal()
-    try:
-        from app.abn import digits_only
-        cred = Creditor(
-            name=name.strip(),
-            abn=digits_only(abn),
-            default_account_id=int(default_account_id) if default_account_id else None,
-            gst_treatment=gst_treatment,
-            invoice_type_id=int(invoice_type_id) if invoice_type_id else None,
-            bsb=clean_bsb(bsb) if bsb else None,
-            bank_account_number=bank_account_number.strip() if bank_account_number else None,
-            bank_account_name=bank_account_name.strip() if bank_account_name else None,
-            notes=notes.strip(),
-        )
-        session.add(cred)
-        session.commit()
-    finally:
-        session.close()
-    return RedirectResponse("/mapping#creditors", status_code=303)
-
-
-@app.post("/mapping/creditor/{creditor_id}/delete")
-def delete_creditor(creditor_id: int, user: User = Depends(require_approver)):
-    session = SessionLocal()
-    try:
-        c = session.get(Creditor, creditor_id)
-        if c:
-            for inv in session.query(Invoice).filter_by(creditor_id=creditor_id):
-                inv.creditor_id = None
-            session.delete(c)
-            session.commit()
-    finally:
-        session.close()
-    return RedirectResponse("/mapping#creditors", status_code=303)
 
 
 @app.post("/mapping/types")
