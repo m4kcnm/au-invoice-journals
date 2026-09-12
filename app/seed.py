@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from app.auth import hash_password
 from app.models import Account, Creditor, InvoiceType, SessionLocal, Setting, User
 
@@ -14,13 +16,13 @@ def seed_if_empty() -> None:
                     username="clerk",
                     full_name="Accounts Clerk",
                     role="operator",
-                    password_hash=hash_password("password123"),
+                    password_hash=hash_password(os.getenv("DEFAULT_CLERK_PASSWORD", "clerk-pass-2026")),
                 ),
                 User(
                     username="manager",
                     full_name="Financial Controller",
                     role="approver",
-                    password_hash=hash_password("password123"),
+                    password_hash=hash_password(os.getenv("DEFAULT_MANAGER_PASSWORD", "manager-pass-2026")),
                 ),
             ])
             session.commit()
