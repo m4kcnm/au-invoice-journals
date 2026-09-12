@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import traceback
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from app.abn import digits_only
 from app.config import DATA_DIR, INBOX_DIR, INVOICES_DIR
@@ -23,6 +25,7 @@ from app.models import (
     set_setting,
 )
 
+logger = logging.getLogger("services")
 ARCHIVE_DIR = DATA_DIR / "archive"
 
 
@@ -146,11 +149,24 @@ def extract_invoice(invoice_id: int) -> None:
     finally:
         session.close()
 
-    captured = capture_document(Path(stored_path))
-    raw_text = captured.get("text") or ""
-    b64_image = captured.get("b64_image")
-    raw_data, method_used = run_hybrid_extract(raw_text, ollama_url=url, model=model, b64_image=b64_image)
-    norm = normalize_extracted(raw_data, raw_text)
+    try:
+        captured = capture_document(Path(stored_path))
+        raw_text = captured.get("text") or ""
+        b64_image = captured.get("b64_image")
+        raw_data, method_used = run_hybrid_extract(raw_text, ollama_url=url, model=model, b64_image=b64_image)
+        norm = normalize_extracted(raw_data, raw_text)
+    except Exception as e:
+        logger.exception("Extraction pipeline failure on bill #%s: %s", invoice_id, e)
+        err_session = SessionLocal()
+        try:
+            inv = err_session.get(Invoice, invoice_id)
+            if inv:
+                inv.status = "failed"
+                log_audit_event(err_session, "EXTRACTION_FAILED", invoice_id=invoice_id, details=f"Pipeline exception: {str(e)[:250]}")
+                err_session.commit()
+        finally:
+            err_session.close()
+        return
 
     session = SessionLocal()
     try:
@@ -213,8 +229,10 @@ def extract_invoice(invoice_id: int) -> None:
         session.commit()
     except Exception as e:
         session.rollback()
-        traceback.print_exc()
-        raise e
+        logger.exception("Failed to commit normalized invoice #%s: %s", invoice_id, e)
+        inv.status = "failed"
+        log_audit_event(session, "EXTRACTION_FAILED", invoice_id=invoice_id, details=f"Database commit error: {str(e)[:250]}")
+        session.commit()
     finally:
         session.close()
 
@@ -225,6 +243,9 @@ def apply_invoice_form(invoice_id: int, form: dict, user=None) -> None:
         inv = session.get(Invoice, invoice_id)
         if not inv:
             return
+        if inv.status == "posted":
+            raise ValueError("Cannot modify an invoice that has already been approved and posted to the General Ledger.")
+
         inv.supplier_name = (form.get("supplier_name") or "").strip()
         inv.supplier_abn = digits_only(form.get("supplier_abn") or "")
         inv.invoice_number = (form.get("invoice_number") or "").strip()
@@ -247,7 +268,14 @@ def apply_invoice_form(invoice_id: int, form: dict, user=None) -> None:
             session.delete(ln)
         session.flush()
 
-        for i in range(0, 40):
+        # Dynamic form line parsing
+        line_indices = sorted({
+            int(k.split("_")[-1])
+            for k in form.keys()
+            if k.startswith("line_desc_") and k.split("_")[-1].isdigit()
+        })
+
+        for order_idx, i in enumerate(line_indices):
             desc = (form.get(f"line_desc_{i}") or "").strip()
             amt = form.get(f"line_amount_{i}")
             if not desc and not amt:
@@ -255,7 +283,7 @@ def apply_invoice_form(invoice_id: int, form: dict, user=None) -> None:
             acc = form.get(f"line_account_{i}") or ""
             inv.lines.append(
                 InvoiceLine(
-                    line_number=i,
+                    line_number=order_idx,
                     description=desc or "Item",
                     amount=money(amt or 0),
                     gst_amount=money(form.get(f"line_gst_{i}") or 0),
@@ -269,7 +297,6 @@ def apply_invoice_form(invoice_id: int, form: dict, user=None) -> None:
         session.commit()
     except Exception as e:
         session.rollback()
-        traceback.print_exc()
         raise e
     finally:
         session.close()

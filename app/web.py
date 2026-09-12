@@ -4,12 +4,13 @@ import csv
 import io
 import json
 import os
-import threading
 import traceback
+from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+import fitz
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -62,13 +63,21 @@ TEMPLATES.env.filters["abn"] = lambda v: format_abn(v) if v else ""
 TEMPLATES.env.filters["aud"] = lambda v: f"${v:,.2f}" if v is not None else ""
 TEMPLATES.env.filters["isodate"] = lambda v: v.isoformat() if v else ""
 
-app = FastAPI(title="AU Invoice Journals")
+
+def boot() -> None:
+    INBOX_DIR.mkdir(parents=True, exist_ok=True)
+    init_db()
+    seed_if_empty()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    boot()
+    yield
+
+
+app = FastAPI(title="AU Invoice Journals", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
-
-
-def start_async_extraction(invoice_id: int) -> None:
-    thread = threading.Thread(target=extract_invoice, args=(invoice_id,), daemon=True)
-    thread.start()
 
 
 @app.exception_handler(HTTPException)
@@ -91,15 +100,6 @@ async def auth_exception_handler(request: Request, exc: HTTPException):
         )
 
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-
-
-def boot() -> None:
-    INBOX_DIR.mkdir(parents=True, exist_ok=True)
-    init_db()
-    seed_if_empty()
-
-
-boot()
 
 
 def ctx(request: Request, **extra):
@@ -199,31 +199,31 @@ def dashboard(request: Request, user: User = Depends(get_current_user)):
 
 
 @app.post("/upload")
-def upload(file: UploadFile = File(...), user: User = Depends(get_current_user)):
+def upload(bg: BackgroundTasks, file: UploadFile = File(...), user: User = Depends(get_current_user)):
     data = file.file.read()
     tmp = INBOX_DIR / (file.filename or "upload.pdf")
     tmp.write_bytes(data)
     inv = ingest_pdf(tmp, file.filename or tmp.name, user=user)
     tmp.unlink(missing_ok=True)
-    start_async_extraction(inv.id)
+    bg.add_task(extract_invoice, inv.id)
     return RedirectResponse(f"/invoices/{inv.id}", status_code=303)
 
 
 @app.post("/inbox")
-def scan_inbox(user: User = Depends(get_current_user)):
+def scan_inbox(bg: BackgroundTasks, user: User = Depends(get_current_user)):
     created = ingest_inbox(user=user)
     for inv in created:
-        start_async_extraction(inv.id)
+        bg.add_task(extract_invoice, inv.id)
     if len(created) == 1:
         return RedirectResponse(f"/invoices/{created[0].id}", status_code=303)
     return RedirectResponse("/invoices", status_code=303)
 
 
 @app.post("/sample")
-def sample(user: User = Depends(get_current_user)):
+def sample(bg: BackgroundTasks, user: User = Depends(get_current_user)):
     path = write_sample_invoice()
     inv = ingest_pdf(path, path.name, user=user)
-    start_async_extraction(inv.id)
+    bg.add_task(extract_invoice, inv.id)
     return RedirectResponse(f"/invoices/{inv.id}", status_code=303)
 
 
@@ -308,7 +308,6 @@ def invoice_detail(request: Request, invoice_id: int, error: str = "", user: Use
 
         page_count = 1
         try:
-            import fitz
             if Path(inv.stored_path).exists():
                 doc = fitz.open(inv.stored_path)
                 page_count = len(doc)
@@ -370,7 +369,6 @@ def invoice_pdf(invoice_id: int, user: User = Depends(get_current_user)):
 
 @app.get("/invoices/{invoice_id}/page/{page_num}")
 def invoice_page_image(invoice_id: int, page_num: int = 0):
-    import fitz
     session = SessionLocal()
     try:
         inv = session.get(Invoice, invoice_id)
@@ -392,7 +390,7 @@ def invoice_page_image(invoice_id: int, page_num: int = 0):
 
 
 @app.post("/invoices/{invoice_id}/extract")
-def invoice_extract(invoice_id: int, user: User = Depends(get_current_user)):
+def invoice_extract(bg: BackgroundTasks, invoice_id: int, user: User = Depends(get_current_user)):
     session = SessionLocal()
     try:
         inv = session.get(Invoice, invoice_id)
@@ -402,15 +400,19 @@ def invoice_extract(invoice_id: int, user: User = Depends(get_current_user)):
             session.commit()
     finally:
         session.close()
-        
-    start_async_extraction(invoice_id)
+
+    bg.add_task(extract_invoice, invoice_id)
     return RedirectResponse(f"/invoices/{invoice_id}", status_code=303)
 
 
 @app.post("/invoices/{invoice_id}/recalculate")
 async def invoice_recalculate(request: Request, invoice_id: int, user: User = Depends(get_current_user)):
     form = dict(await request.form())
-    apply_invoice_form(invoice_id, form, user=user)
+    try:
+        apply_invoice_form(invoice_id, form, user=user)
+    except ValueError as val_err:
+        return JSONResponse(status_code=400, content={"error": str(val_err)})
+
     session = SessionLocal()
     try:
         inv = session.get(Invoice, invoice_id)
@@ -443,7 +445,10 @@ async def invoice_recalculate(request: Request, invoice_id: int, user: User = De
 @app.post("/invoices/{invoice_id}/save")
 async def invoice_save(request: Request, invoice_id: int, user: User = Depends(get_current_user)):
     form = dict(await request.form())
-    apply_invoice_form(invoice_id, form, user=user)
+    try:
+        apply_invoice_form(invoice_id, form, user=user)
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err))
     return RedirectResponse(f"/invoices/{invoice_id}", status_code=303)
 
 
@@ -455,7 +460,10 @@ async def invoice_journal(
     user: User = Depends(get_current_user),
 ):
     form = dict(await request.form())
-    apply_invoice_form(invoice_id, form, user=user)
+    try:
+        apply_invoice_form(invoice_id, form, user=user)
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err))
 
     session = SessionLocal()
     try:

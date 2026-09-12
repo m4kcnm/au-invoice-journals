@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+from app.abn import is_valid_abn
 from app.gst import bas_labels, money, split_line
 from app.mappings import resolve_mapping
 from app.models import Account, Invoice, Journal, JournalLine, SessionLocal, account_by_code
@@ -186,7 +187,6 @@ def build_journal_preview(session, invoice: Invoice) -> dict:
 
     warnings = []
     if invoice.supplier_abn and len(invoice.supplier_abn) == 11:
-        from app.abn import is_valid_abn
         if not is_valid_abn(invoice.supplier_abn):
             warnings.append("Supplier ABN fails the ATO checksum — check before claiming GST credits.")
     if gst_registered and invoice.is_tax_invoice and money(invoice.total) >= Decimal("82.50") and not invoice.supplier_abn:
@@ -207,14 +207,30 @@ def build_journal_preview(session, invoice: Invoice) -> dict:
 
 def persist_journal(session, invoice: Invoice, *, post: bool) -> Journal:
     preview = build_journal_preview(session, invoice)
-    j = Journal(
-        invoice_id=invoice.id,
-        date=preview["date"],
-        narration=preview["narration"],
-        status="posted" if post else "draft",
+
+    # Upsert draft journal if one already exists for this invoice
+    j = (
+        session.query(Journal)
+        .filter(Journal.invoice_id == invoice.id, Journal.status == "draft")
+        .first()
     )
-    session.add(j)
-    session.flush()
+
+    if not j:
+        j = Journal(
+            invoice_id=invoice.id,
+            date=preview["date"],
+            narration=preview["narration"],
+            status="posted" if post else "draft",
+        )
+        session.add(j)
+        session.flush()
+    else:
+        j.date = preview["date"]
+        j.narration = preview["narration"]
+        j.status = "posted" if post else "draft"
+        for ln in list(j.lines):
+            session.delete(ln)
+        session.flush()
 
     for row in preview["lines"]:
         session.add(

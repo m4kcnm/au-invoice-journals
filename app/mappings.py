@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.abn import digits_only
 from app.gst import infer_treatment_from_text
 from app.models import Account, Creditor, Invoice, InvoiceLine, InvoiceType, MappingRule, account_by_code
 
@@ -30,9 +31,8 @@ def match_invoice_type(session, invoice: Invoice, line: InvoiceLine | None = Non
     return None
 
 
-def match_rule(session, invoice: Invoice, line: InvoiceLine | None) -> MappingRule | None:
-    from app.abn import digits_only
-    rules = (
+def match_rule(session, invoice: Invoice, line: InvoiceLine | None, cached_rules: list[MappingRule] | None = None) -> MappingRule | None:
+    rules = cached_rules if cached_rules is not None else (
         session.query(MappingRule)
         .order_by(MappingRule.priority.asc(), MappingRule.id.asc())
         .all()
@@ -55,8 +55,7 @@ def match_rule(session, invoice: Invoice, line: InvoiceLine | None) -> MappingRu
     return None
 
 
-def resolve_mapping(session, invoice: Invoice, line: InvoiceLine | None = None) -> dict:
-    from app.abn import digits_only
+def resolve_mapping(session, invoice: Invoice, line: InvoiceLine | None = None, cached_rules: list[MappingRule] | None = None) -> dict:
     unallocated = (
         account_by_code(session, "6-9000")
         or account_by_code(session, "6-1300")
@@ -83,12 +82,11 @@ def resolve_mapping(session, invoice: Invoice, line: InvoiceLine | None = None) 
     if not creditor and invoice.supplier_name:
         creditor = session.query(Creditor).filter(Creditor.name.ilike(invoice.supplier_name.strip())).first()
 
-    # If creditor has a linked invoice category and none was detected, inherit it
     if creditor and creditor.invoice_type_id and not itype:
         itype = session.get(InvoiceType, creditor.invoice_type_id)
 
     # 3. Rule matching
-    rule = match_rule(session, invoice, line)
+    rule = match_rule(session, invoice, line, cached_rules=cached_rules)
     if line and line.account_id:
         account = session.get(Account, line.account_id)
         source = "line"
@@ -137,6 +135,7 @@ def resolve_mapping(session, invoice: Invoice, line: InvoiceLine | None = None) 
         "creditor": creditor,
         "source": source,
     }
+
 
 def preview_resolution(supplier: str, abn: str, description: str, invoice_type_id: int | None) -> dict:
     from app.models import SessionLocal
