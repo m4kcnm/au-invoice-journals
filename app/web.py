@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import traceback
+from datetime import date
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -13,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from app.aba import clean_bsb, generate_aba_file
 from app.abn import format_abn, is_valid_abn
 from app.auth import (
     SESSION_COOKIE_NAME,
@@ -56,7 +58,6 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 
 
 def start_async_extraction(invoice_id: int) -> None:
-    """Spawns extraction in a detached daemon thread so web responses are immediate."""
     thread = threading.Thread(target=extract_invoice, args=(invoice_id,), daemon=True)
     thread.start()
 
@@ -223,6 +224,43 @@ def invoices_list(request: Request, user: User = Depends(get_current_user)):
     try:
         rows = session.query(Invoice).order_by(Invoice.id.desc()).all()
         return TEMPLATES.TemplateResponse("invoices.html", ctx(request, invoices=rows))
+    finally:
+        session.close()
+
+
+@app.get("/payments/aba")
+def download_aba_file(user: User = Depends(require_approver)):
+    """Exports all POSTED (approved) invoices as a Cemtext Direct Credit batch."""
+    session = SessionLocal()
+    try:
+        invoices = (
+            session.query(Invoice)
+            .filter(Invoice.status == "posted")
+            .order_by(Invoice.id.asc())
+            .all()
+        )
+
+        bank_code = get_setting(session, "bank_code", "WBC")
+        user_name = get_setting(session, "entity_name", "My Australian Business")
+        apca = get_setting(session, "user_apca_number", "000000")
+        bsb = get_setting(session, "remitter_bsb", "000-000")
+        acc = get_setting(session, "remitter_account", "00000000")
+
+        aba_content = generate_aba_file(
+            invoices,
+            bank_code=bank_code,
+            user_name=user_name,
+            user_apca_number=apca,
+            remitter_bsb=bsb,
+            remitter_account=acc,
+        )
+
+        today_str = date.today().strftime("%Y%m%d")
+        return Response(
+            content=aba_content,
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename=PAYRUN_{today_str}.aba"},
+        )
     finally:
         session.close()
 
@@ -519,6 +557,9 @@ def save_creditor(
     default_account_id: str = Form(""),
     gst_treatment: str = Form("taxable"),
     invoice_type_id: str = Form(""),
+    bsb: str = Form(""),
+    bank_account_number: str = Form(""),
+    bank_account_name: str = Form(""),
     notes: str = Form(""),
     user: User = Depends(require_approver),
 ):
@@ -529,11 +570,15 @@ def save_creditor(
             c.default_account_id = int(default_account_id) if default_account_id else None
             c.gst_treatment = gst_treatment
             c.invoice_type_id = int(invoice_type_id) if invoice_type_id else None
-            c.notes = notes
+            c.bsb = clean_bsb(bsb) if bsb else None
+            c.bank_account_number = bank_account_number.strip() if bank_account_number else None
+            c.bank_account_name = bank_account_name.strip() if bank_account_name else None
+            c.notes = notes.strip()
             session.commit()
     finally:
         session.close()
     return RedirectResponse("/mapping#creditors", status_code=303)
+
 
 @app.post("/mapping/creditors/new")
 def create_creditor(
@@ -542,6 +587,9 @@ def create_creditor(
     default_account_id: str = Form(""),
     gst_treatment: str = Form("taxable"),
     invoice_type_id: str = Form(""),
+    bsb: str = Form(""),
+    bank_account_number: str = Form(""),
+    bank_account_name: str = Form(""),
     notes: str = Form(""),
     user: User = Depends(require_approver),
 ):
@@ -554,6 +602,9 @@ def create_creditor(
             default_account_id=int(default_account_id) if default_account_id else None,
             gst_treatment=gst_treatment,
             invoice_type_id=int(invoice_type_id) if invoice_type_id else None,
+            bsb=clean_bsb(bsb) if bsb else None,
+            bank_account_number=bank_account_number.strip() if bank_account_number else None,
+            bank_account_name=bank_account_name.strip() if bank_account_name else None,
             notes=notes.strip(),
         )
         session.add(cred)
@@ -569,7 +620,6 @@ def delete_creditor(creditor_id: int, user: User = Depends(require_approver)):
     try:
         c = session.get(Creditor, creditor_id)
         if c:
-            # Unlink invoices referencing this creditor before deletion
             for inv in session.query(Invoice).filter_by(creditor_id=creditor_id):
                 inv.creditor_id = None
             session.delete(c)
@@ -577,6 +627,7 @@ def delete_creditor(creditor_id: int, user: User = Depends(require_approver)):
     finally:
         session.close()
     return RedirectResponse("/mapping#creditors", status_code=303)
+
 
 @app.post("/mapping/types")
 def save_type(
@@ -781,6 +832,10 @@ def settings_page(request: Request, user: User = Depends(require_approver)):
                 entity_name=get_setting(session, "entity_name"),
                 gst_registered=get_setting(session, "gst_registered") == "true",
                 accounting_basis=get_setting(session, "accounting_basis"),
+                bank_code=get_setting(session, "bank_code", "PCU"),
+                user_apca_number=get_setting(session, "user_apca_number", "123456"),
+                remitter_bsb=get_setting(session, "remitter_bsb", "085-005"),
+                remitter_account=get_setting(session, "remitter_account", "123456789"),
                 ollama_url=url,
                 ollama_model=get_setting(session, "ollama_model"),
                 ollama_ok=ping(url),
@@ -796,6 +851,10 @@ def save_settings(
     entity_name: str = Form(...),
     gst_registered: str = Form("false"),
     accounting_basis: str = Form("accrual"),
+    bank_code: str = Form("PCU"),
+    user_apca_number: str = Form("123456"),
+    remitter_bsb: str = Form("085-005"),
+    remitter_account: str = Form("123456789"),
     ollama_url: str = Form(...),
     ollama_model: str = Form(""),
     user: User = Depends(require_approver),
@@ -805,6 +864,10 @@ def save_settings(
         set_setting(session, "entity_name", entity_name)
         set_setting(session, "gst_registered", "true" if gst_registered == "true" else "false")
         set_setting(session, "accounting_basis", accounting_basis)
+        set_setting(session, "bank_code", bank_code.strip())
+        set_setting(session, "user_apca_number", user_apca_number.strip())
+        set_setting(session, "remitter_bsb", clean_bsb(remitter_bsb))
+        set_setting(session, "remitter_account", remitter_account.strip())
         set_setting(session, "ollama_url", ollama_url.strip())
         set_setting(session, "ollama_model", ollama_model.strip())
         session.commit()

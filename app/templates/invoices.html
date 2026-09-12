@@ -4,16 +4,23 @@
 <div class="page-header">
   <div>
     <h2>Bills to Pay</h2>
-    <div class="page-subtitle">Manage extracted creditor invoices, review tax treatment, and post purchase entries.</div>
+    <div class="page-subtitle">Manage extracted creditor invoices, review tax treatment, and export ABA payment batches.</div>
   </div>
-  <div style="display: flex; gap: 0.6rem;">
-    <form action="/upload" method="post" enctype="multipart/form-data">
-      <label class="btn action">
+  <div style="display: flex; gap: 0.6rem; align-items: center;">
+    {% if current_user and current_user.role == 'approver' %}
+    <a class="btn" href="/payments/aba" style="border-color: #0284c7; color: #0284c7;" title="Export Cemtext Direct Entry ABA file for internet banking">
+      &darr; Export ABA Pay Run
+    </a>
+    {% endif %}
+    <form action="/upload" method="post" enctype="multipart/form-data" style="margin: 0;">
+      <label class="btn action" style="cursor: pointer;">
         + Upload PDF
         <input type="file" name="file" accept="application/pdf" hidden onchange="this.form.submit()" />
       </label>
     </form>
-    <form action="/inbox" method="post"><button class="btn" type="submit">Scan Inbox Folder</button></form>
+    <form action="/inbox" method="post" style="margin: 0;">
+      <button class="btn" type="submit">Scan Inbox Folder</button>
+    </form>
   </div>
 </div>
 

@@ -3,21 +3,41 @@
 {% block body %}
 <h2>Settings</h2>
 <form class="card stack" method="post" action="/settings">
-  <label>Entity name <input name="entity_name" value="{{ entity_name }}" /></label>
-  <label>GST
+  <label>Entity Name <input name="entity_name" value="{{ entity_name }}" /></label>
+  <label>GST Treatment
     <select name="gst_registered">
       <option value="true" {% if gst_registered %}selected{% endif %}>Registered — split GST, claim 1B</option>
       <option value="false" {% if not gst_registered %}selected{% endif %}>Not registered — expense the gross</option>
     </select>
   </label>
-  <label>Accounting basis
+  <label>Accounting Basis
     <select name="accounting_basis">
       <option value="accrual" {% if accounting_basis == 'accrual' %}selected{% endif %}>Accrual (credit AP)</option>
       <option value="cash" {% if accounting_basis == 'cash' %}selected{% endif %}>Cash (still drafts AP; pay separately)</option>
     </select>
   </label>
+
+  <h3 style="margin-top: 1rem; margin-bottom: 0.3rem;">Direct Entry Banking (ABA Cemtext)</h3>
+  <div class="row2">
+    <label>Financial Institution Code (3 Chars)
+      <input name="bank_code" value="{{ bank_code }}" placeholder="e.g. PCU, WBC, CBA, ANZ, NAB" maxlength="3" />
+    </label>
+    <label>APCA / User ID (6 Digits)
+      <input name="user_apca_number" value="{{ user_apca_number }}" placeholder="e.g. 123456" maxlength="6" />
+    </label>
+  </div>
+  <div class="row2">
+    <label>Remitter BSB (Operating Account)
+      <input name="remitter_bsb" value="{{ remitter_bsb }}" placeholder="085-005" />
+    </label>
+    <label>Remitter Account Number
+      <input name="remitter_account" value="{{ remitter_account }}" placeholder="123456789" />
+    </label>
+  </div>
+
+  <h3 style="margin-top: 1rem; margin-bottom: 0.3rem;">Local AI Engine</h3>
   <label>Ollama URL <input name="ollama_url" value="{{ ollama_url }}" /></label>
-  <p class="muted">{% if ollama_ok %}Connected.{% else %}Not connected — start Ollama from the Dock or run <code>ollama serve</code>.{% endif %}</p>
+  <p class="muted">{% if ollama_ok %}<span class="ok">Connected.</span>{% else %}<span class="bad">Not connected — verify Ollama daemon is active.</span>{% endif %}</p>
   <label>Model
     <select name="ollama_model">
       <option value="">Auto (first suitable local model)</option>
@@ -26,7 +46,6 @@
       {% endfor %}
     </select>
   </label>
-  <p class="lede">Local only: PDFs never leave this computer. Pull a model once with <code>ollama pull llama3.2</code> (add <code>llama3.2-vision</code> for scanned pages).</p>
-  <button class="btn primary" type="submit">Save settings</button>
+  <button class="btn primary" type="submit" style="margin-top: 0.8rem;">Save Settings</button>
 </form>
 {% endblock %}

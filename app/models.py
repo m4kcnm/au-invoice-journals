@@ -18,7 +18,6 @@ ENGINE = create_engine(
 )
 
 
-# Enable SQLite Write-Ahead Logging (WAL) and Busy Timeout
 @event.listens_for(ENGINE, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     if isinstance(dbapi_connection, sqlite3.Connection):
@@ -111,6 +110,11 @@ class Creditor(Base):
     gst_treatment = Column(String(32), default="taxable")
     invoice_type_id = Column(Integer, ForeignKey("invoice_types.id"), nullable=True)
     notes = Column(Text, default="")
+
+    # Banking details for Australian direct entry (ABA)
+    bsb = Column(String(7), nullable=True)
+    bank_account_number = Column(String(10), nullable=True)
+    bank_account_name = Column(String(32), nullable=True)
 
     default_account = relationship("Account")
     invoice_type = relationship("InvoiceType")

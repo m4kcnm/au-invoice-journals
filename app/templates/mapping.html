@@ -4,12 +4,12 @@
 <div class="page-header">
   <div>
     <h2>Mapping Studio</h2>
-    <div class="page-subtitle">Configure ledger routing rules, creditor expense defaults, and automated keyword matchers.</div>
+    <div class="page-subtitle">Configure ledger routing rules, creditor expense defaults, and direct entry banking details.</div>
   </div>
 </div>
 
 <div class="tabs" id="tabs">
-  <button type="button" class="tab-btn on" data-tab="creditors">Creditors</button>
+  <button type="button" class="tab-btn on" data-tab="creditors">Creditors & Banking</button>
   <button type="button" class="tab-btn" data-tab="types">Invoice Categories</button>
   <button type="button" class="tab-btn" data-tab="rules">Mapping Rules</button>
   <button type="button" class="tab-btn" data-tab="test">Test Mapper</button>
@@ -17,63 +17,68 @@
 
 <!-- TAB 1: CREDITORS -->
 <section class="tab-pane on" id="tab-creditors">
-  <!-- Register New Creditor -->
   <article class="card" style="margin-bottom: 1.5rem;">
     <header>
       <h3>Register New Creditor</h3>
-      <span class="muted">Add a vendor manually to pre-configure ledger routing</span>
+      <span class="muted">Add vendor with GL default and payment remittance details</span>
     </header>
-    <form class="map-row" action="/mapping/creditors/new" method="post" style="background: #f8fafc; padding: 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-light);">
-      <input name="name" placeholder="Trading Name (e.g. Diamond Energy)" required style="flex: 1.5;" />
-      <input name="abn" placeholder="ABN (optional)" style="flex: 1;" />
-      <select name="default_account_id" style="flex: 1.5;">
+    <form class="map-row" action="/mapping/creditors/new" method="post" style="background: #f8fafc; padding: 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-light); display: flex; flex-wrap: wrap; gap: 0.5rem;">
+      <input name="name" placeholder="Trading Name (e.g. Origin Energy)" required style="flex: 1.5; min-width: 160px;" />
+      <input name="abn" placeholder="ABN" style="width: 120px;" />
+      <input name="bsb" placeholder="BSB (XXX-XXX)" style="width: 105px;" />
+      <input name="bank_account_number" placeholder="Account #" style="width: 110px;" />
+      <input name="bank_account_name" placeholder="Account Title" style="width: 130px;" />
+      <select name="default_account_id" style="flex: 1.2; min-width: 160px;">
         <option value="">— Default Ledger —</option>
         {% for a in accounts %}
         <option value="{{ a.id }}">{{ a.code }} {{ a.name }}</option>
         {% endfor %}
       </select>
-      <select name="gst_treatment" style="flex: 1;">
+      <select name="gst_treatment" style="width: 100px;">
         {% for t in treatments %}
         <option value="{{ t }}" {% if t == 'taxable' %}selected{% endif %}>{{ t }}</option>
         {% endfor %}
       </select>
-      <select name="invoice_type_id" style="flex: 1;">
+      <select name="invoice_type_id" style="width: 120px;">
         <option value="">— Category —</option>
         {% for t in types %}
         <option value="{{ t.id }}">{{ t.name }}</option>
         {% endfor %}
       </select>
-      <button class="btn primary" type="submit">+ Add</button>
+      <button class="btn primary" type="submit">+ Add Creditor</button>
     </form>
   </article>
 
-  <!-- Creditor Expense Defaults -->
   <article class="card">
     <header>
-      <h3>Creditor Expense Defaults</h3>
+      <h3>Creditor Directory & Payment Settings</h3>
       <span class="muted">{{ creditors|length }} creditors registered</span>
     </header>
-    <p class="muted" style="margin-top: 0;">Set default general ledger expense accounts for extracted creditors to auto-route future bills.</p>
     
     {% for c in creditors %}
-    <div style="display: flex; gap: 0.5rem; align-items: center; border-bottom: 1px solid var(--border-light); padding: 0.5rem 0;">
-      <form class="map-row" action="/mapping/creditor/{{ c.id }}" method="post" style="flex: 1; border-bottom: none; padding: 0;">
-        <div style="min-width: 180px;">
+    <div style="display: flex; gap: 0.5rem; align-items: center; border-bottom: 1px solid var(--border-light); padding: 0.6rem 0; flex-wrap: wrap;">
+      <form class="map-row" action="/mapping/creditor/{{ c.id }}" method="post" style="flex: 1; border-bottom: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
+        <div style="min-width: 170px;">
           <strong>{{ c.name }}</strong>
           <div class="muted" style="font-size: 0.78rem;">{{ c.abn | abn or "No ABN recorded" }}</div>
         </div>
-        <select name="default_account_id">
+
+        <input name="bsb" value="{{ c.bsb or '' }}" placeholder="BSB" style="width: 95px;" title="BSB format XXX-XXX" />
+        <input name="bank_account_number" value="{{ c.bank_account_number or '' }}" placeholder="Account #" style="width: 110px;" />
+        <input name="bank_account_name" value="{{ c.bank_account_name or '' }}" placeholder="Account Name" style="width: 125px;" />
+
+        <select name="default_account_id" style="flex: 1; min-width: 160px;">
           <option value="">— No default ledger —</option>
           {% for a in accounts %}
           <option value="{{ a.id }}" {% if c.default_account_id == a.id %}selected{% endif %}>{{ a.code }} {{ a.name }}</option>
           {% endfor %}
         </select>
-        <select name="gst_treatment">
+        <select name="gst_treatment" style="width: 100px;">
           {% for t in treatments %}
           <option value="{{ t }}" {% if c.gst_treatment == t %}selected{% endif %}>{{ t }}</option>
           {% endfor %}
         </select>
-        <select name="invoice_type_id">
+        <select name="invoice_type_id" style="width: 120px;">
           <option value="">— Category —</option>
           {% for t in types %}
           <option value="{{ t.id }}" {% if c.invoice_type_id == t.id %}selected{% endif %}>{{ t.name }}</option>
@@ -86,7 +91,7 @@
       </form>
     </div>
     {% else %}
-    <p class="muted" style="padding: 1.5rem; text-align: center;">No creditors recorded yet. Upload a bill or register one above.</p>
+    <p class="muted" style="padding: 1.5rem; text-align: center;">No creditors recorded yet. Ingest an invoice or add one above.</p>
     {% endfor %}
   </article>
 </section>
@@ -98,7 +103,6 @@
       <h3>Invoice Categories</h3>
       <span class="muted">Keyword-driven matching</span>
     </header>
-    
     {% for t in types %}
     <div style="display: flex; gap: 0.5rem; align-items: center; border-bottom: 1px solid var(--border-light); padding: 0.5rem 0;">
       <form class="map-row" action="/mapping/types" method="post" style="flex: 1; border-bottom: none; padding: 0;">
@@ -147,7 +151,6 @@
       <h3>Rule Hierarchy</h3>
       <span class="muted">Lower priority number executes first</span>
     </header>
-    
     <table class="wide" style="margin-bottom: 1.5rem;">
       <thead>
         <tr>
