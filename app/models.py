@@ -58,6 +58,25 @@ class AuditLog(Base):
     invoice = relationship("Invoice", back_populates="audit_logs")
 
 
+class CreditorAuditLog(Base):
+    __tablename__ = "creditor_audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    creditor_id = Column(Integer, ForeignKey("creditors.id"), nullable=False, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    username = Column(String(64), nullable=False, default="System")
+    action = Column(String(64), nullable=False)
+    old_bsb = Column(String(16), nullable=True)
+    new_bsb = Column(String(16), nullable=True)
+    old_account = Column(String(32), nullable=True)
+    new_account = Column(String(32), nullable=True)
+    details = Column(Text, nullable=True)
+
+    creditor = relationship("Creditor", back_populates="audit_logs")
+    user = relationship("User")
+
+
 class Setting(Base):
     __tablename__ = "settings"
     key = Column(String(64), primary_key=True)
@@ -118,6 +137,7 @@ class Creditor(Base):
 
     default_account = relationship("Account")
     invoice_type = relationship("InvoiceType")
+    audit_logs = relationship("CreditorAuditLog", back_populates="creditor", order_by="CreditorAuditLog.timestamp.desc()", cascade="all, delete-orphan")
 
 
 class MappingRule(Base):

@@ -15,31 +15,33 @@ from app.abn import digits_only, is_valid_abn
 from app.gst import gst_from_inclusive, money
 from app.ollama_client import chat_json, list_models, pick_model
 
-AI_SYSTEM_PROMPT = """You are an Accounts Payable and Tax Invoice AI Auditor.
-Extract structured bookkeeping attributes from this invoice or bill text (handling both Australian and international invoices).
+AI_SYSTEM_PROMPT = """You are an Accounts Payable, Remittance, and Tax Invoice AI Auditor.
+Extract structured bookkeeping and direct-entry payment attributes from this invoice or bill text (handling both Australian and international invoices).
 
-CRITICAL ENTITY DISAMBIGUATION RULES:
+CRITICAL ENTITY & BANKING DISAMBIGUATION RULES:
 - "supplier_name" MUST be the selling business / vendor issuing the bill.
-- NEVER use the customer / account holder name (the person or entity being billed, often found after "Hi", "Dear", or in the delivery/client address).
-- Look for the legal trading name near the top header, tax registration title, or invoice title.
-- "line_items": Keep this concise. Summarize charges into at most 2-3 major line items (e.g. "Electricity Supply & Usage" or "Joinery & Materials"). Do NOT transcribe individual meter reads, daily calculation tiers, or excessive sub-lines.
+- NEVER use the customer / account holder name (the person or entity being billed).
+- Look for EFT / Direct Deposit payment options to identify payee bank details:
+  - "bsb": Australian 6-digit BSB (formatted as XXX-XXX or 6 digits). Set null if not found.
+  - "bank_account_number": Creditor's bank account number (digits only). Set null if not found.
+  - "bank_account_name": Account title / name on account if stated. Set null if not found.
+- "line_items": Keep this concise. Summarize charges into at most 2-3 major line items.
 
 TAX & JURISDICTION RULES:
-- Australia: Standard GST is 10% (1/11th of GST-inclusive amount). Water, council rates, and financial charges are GST-free. Telco, energy, software, and general supplies are standard taxable.
-- International / Overseas:
-  - If the invoice is non-Australian (e.g. UK VAT, European VAT, US Sales Tax, or foreign currency), set "supplier_abn" to null.
-  - Map any foreign tax (VAT, Sales Tax) to "gst_amount".
-  - For international supplies without Australian GST registration, set line "gst_treatment" to "out_of_scope".
-  - Infer "currency" from symbols or text (£ -> GBP, € -> EUR, US$ -> USD, NZ$ -> NZD, A$/$ default -> AUD).
+- Australia: Standard GST is 10% (1/11th of GST-inclusive amount).
+- International / Overseas: Set "supplier_abn", "bsb", and "bank_account_number" to null.
 
 Return ONLY valid JSON matching this schema:
 {
-  "supplier_name": "Full legal or trading business name (e.g. Flip, Origin Energy, Hillside Joinery Ltd)",
-  "supplier_abn": "11 digit Australian ABN without spaces, or null if international / not present",
+  "supplier_name": "Full legal or trading business name",
+  "supplier_abn": "11 digit Australian ABN without spaces, or null",
   "invoice_number": "Invoice, account or bill reference number",
   "invoice_date": "YYYY-MM-DD or null",
   "due_date": "YYYY-MM-DD or null",
   "currency": "AUD" | "USD" | "GBP" | "EUR" | "NZD" | "CAD",
+  "bsb": "XXX-XXX or null",
+  "bank_account_number": "Digits only or null",
+  "bank_account_name": "Account title or null",
   "is_tax_invoice": true,
   "gst_inclusive": true,
   "subtotal_ex_gst": 0.00,
@@ -69,7 +71,6 @@ def parse_date(value: Any) -> date | None:
 
 
 def extract_pdf_text(path: Path) -> str:
-    """Extracts raw text stream from vector PDFs via PyMuPDF."""
     try:
         doc = fitz.open(path)
         parts = []
@@ -82,7 +83,6 @@ def extract_pdf_text(path: Path) -> str:
 
 
 def render_page_base64(path: Path, page_index: int = 0) -> str | None:
-    """Renders a PDF page directly to a base64 PNG string for multimodal LLMs."""
     try:
         doc = fitz.open(path)
         if page_index >= len(doc):
@@ -98,10 +98,8 @@ def render_page_base64(path: Path, page_index: int = 0) -> str | None:
 
 
 def capture_document(path: Path) -> dict[str, Any]:
-    """Inspects the PDF: extracts text, or provides an image frame if scanned/empty."""
     text = extract_pdf_text(path)
     b64_image = None
-    # If the document has minimal or no selectable text, prepare Page 1 image for Vision models
     if len(text) < 40:
         b64_image = render_page_base64(path, 0)
     return {"text": text, "b64_image": b64_image}
@@ -118,6 +116,26 @@ def find_abn_candidates(text: str) -> list[str]:
         if len(clean) == 11 and clean not in cands:
             cands.append(clean)
     return cands
+
+
+def find_bank_candidates(text: str) -> tuple[str | None, str | None]:
+    """Deterministic regex extraction for Australian EFT BSB and Account numbers."""
+    bsb = None
+    account = None
+
+    # Matches BSB: 123-456 or BSB 123 456 or BSB: 123456
+    m_bsb = re.search(r"\bBSB\s*[:.\s-]*([0-9]{3}[\s-]*[0-9]{3})\b", text, re.IGNORECASE)
+    if m_bsb:
+        d = re.sub(r"\D", "", m_bsb.group(1))
+        if len(d) == 6:
+            bsb = f"{d[:3]}-{d[3:]}"
+
+    # Matches Account / ACC / Account No: 123456789
+    m_acc = re.search(r"\b(?:Account|Acc|A/C)(?:\s*(?:No|Number|#))?\s*[:.\s-]*([0-9]{5,10})\b", text, re.IGNORECASE)
+    if m_acc:
+        account = m_acc.group(1).strip()
+
+    return bsb, account
 
 
 def find_total_candidates(text: str) -> tuple[Decimal | None, Decimal | None]:
@@ -165,6 +183,7 @@ def regex_fallback_extract(text: str) -> dict[str, Any]:
 
     abns = find_abn_candidates(text)
     abn = abns[0] if abns else ""
+    bsb, acc = find_bank_candidates(text)
 
     m_inv = re.search(r"(?:Invoice\s*Date|Issued\s*on|Date|Bill\s*Date)\s*[:\s]*([0-9A-Za-z\s\/\-\.]+)", text, re.I)
     inv_date = parse_date(m_inv.group(1)) if m_inv else None
@@ -192,6 +211,9 @@ def regex_fallback_extract(text: str) -> dict[str, Any]:
         "invoice_date": inv_date.isoformat() if inv_date else None,
         "due_date": due.isoformat() if due else None,
         "currency": "AUD",
+        "bsb": bsb,
+        "bank_account_number": acc,
+        "bank_account_name": supplier[:32] if supplier else None,
         "is_tax_invoice": True,
         "gst_inclusive": True,
         "subtotal_ex_gst": sub,
@@ -216,6 +238,7 @@ def run_hybrid_extract(
 ) -> tuple[dict[str, Any], str]:
     abns = find_abn_candidates(text)
     reg_tot, reg_gst = find_total_candidates(text)
+    reg_bsb, reg_acc = find_bank_candidates(text)
 
     hints = []
     if abns:
@@ -224,21 +247,21 @@ def run_hybrid_extract(
         hints.append(f"Detected Gross Total: ${reg_tot:.2f}")
     if reg_gst:
         hints.append(f"Detected GST Amount: ${reg_gst:.2f}")
+    if reg_bsb:
+        hints.append(f"Detected Remittance BSB: {reg_bsb}, Account: {reg_acc or 'None'}")
 
     hint_str = f"\n[Document Hints: {'; '.join(hints)}]" if hints else ""
 
     available = list_models(ollama_url)
 
-    # Route to Vision model if no text was extractable
     if not text.strip() and b64_image:
         chosen_model = model or pick_model(available, prefer_vision=True) or "qwen2.5-vl:latest"
-        user_prompt = "Extract all invoice details from this scanned document image."
+        user_prompt = "Extract all invoice details, tax totals, and remittance bank details from this scanned image."
         images = [b64_image]
     else:
         chosen_model = model or pick_model(available, prefer_vision=False) or "qwen2.5:3b"
-        # Truncate text to 2,500 chars so prompt evaluation remains instant on M2/CPU
         user_prompt = (
-            f"Extract all invoice details from this document text.{hint_str}\n\n"
+            f"Extract all invoice details and payment remittance bank details from this document text.{hint_str}\n\n"
             f"--- DOCUMENT TEXT ---\n{text[:2500]}"
         )
         images = None
@@ -290,6 +313,18 @@ def normalize_extracted(data: dict[str, Any], raw_text: str) -> dict[str, Any]:
     if sub == 0 or sub == total:
         sub = total - gst
 
+    # Clean extracted BSB
+    raw_bsb = str(data.get("bsb") or "")
+    clean_b = re.sub(r"\D", "", raw_bsb)
+    final_bsb = f"{clean_b[:3]}-{clean_b[3:]}" if len(clean_b) == 6 else None
+
+    # Fallback to regex BSB if AI missed it
+    reg_bsb, reg_acc = find_bank_candidates(raw_text)
+    if not final_bsb and reg_bsb:
+        final_bsb = reg_bsb
+
+    acc_num = re.sub(r"\D", "", str(data.get("bank_account_number") or "")) or reg_acc or None
+
     raw_lines = data.get("line_items") or data.get("lines") or []
     norm_lines = []
     for ln in raw_lines:
@@ -319,6 +354,9 @@ def normalize_extracted(data: dict[str, Any], raw_text: str) -> dict[str, Any]:
         "supplier_name": str(data.get("supplier_name") or "").strip(),
         "supplier_abn": abn,
         "abn_valid": is_valid_abn(abn) if abn else False,
+        "bsb": final_bsb,
+        "bank_account_number": acc_num,
+        "bank_account_name": str(data.get("bank_account_name") or "").strip() or None,
         "invoice_number": str(data.get("invoice_number") or "").strip(),
         "invoice_date": parse_date(data.get("invoice_date")),
         "due_date": parse_date(data.get("due_date")),

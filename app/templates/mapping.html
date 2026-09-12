@@ -4,12 +4,13 @@
 <div class="page-header">
   <div>
     <h2>Mapping Studio</h2>
-    <div class="page-subtitle">Configure ledger routing rules, creditor expense defaults, and direct entry banking details.</div>
+    <div class="page-subtitle">Configure ledger routing rules, creditor expense defaults, direct entry banking, and bank change audit trails.</div>
   </div>
 </div>
 
 <div class="tabs" id="tabs">
   <button type="button" class="tab-btn on" data-tab="creditors">Creditors & Banking</button>
+  <button type="button" class="tab-btn" data-tab="audit">Creditor Change Log</button>
   <button type="button" class="tab-btn" data-tab="types">Invoice Categories</button>
   <button type="button" class="tab-btn" data-tab="rules">Mapping Rules</button>
   <button type="button" class="tab-btn" data-tab="test">Test Mapper</button>
@@ -96,7 +97,66 @@
   </article>
 </section>
 
-<!-- TAB 2: INVOICE TYPES -->
+<!-- TAB 2: CREDITOR CHANGE LOG (AUDIT TRAIL) -->
+<section class="tab-pane" id="tab-audit">
+  <article class="card">
+    <header>
+      <h3>Creditor Banking & Profile Change Log</h3>
+      <span class="muted">Immutable record of all BSB & Account creations, modifications, and warnings</span>
+    </header>
+    <div class="table-responsive">
+      <table class="wide" style="font-size: 0.85rem;">
+        <thead>
+          <tr>
+            <th style="width: 150px;">Timestamp</th>
+            <th style="width: 180px;">Creditor</th>
+            <th style="width: 130px;">Action</th>
+            <th style="width: 130px;">User / Agent</th>
+            <th>Old Details &rarr; New Details</th>
+            <th>Context / Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set all_logs = [] %}
+          {% for c in creditors %}
+            {% for l in c.audit_logs %}
+              {% set _ = all_logs.append((l, c)) %}
+            {% endfor %}
+          {% endfor %}
+
+          {% for l, c in all_logs | sort(attribute='0.timestamp', reverse=True) %}
+          <tr>
+            <td class="muted">{{ l.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td><strong>{{ c.name }}</strong></td>
+            <td>
+              <span class="tag {% if 'MISMATCH' in l.action %}extracted{% elif 'MANUAL' in l.action %}reviewed{% else %}posted{% endif %}">
+                {{ l.action }}
+              </span>
+            </td>
+            <td><strong>{{ l.username }}</strong></td>
+            <td>
+              {% if l.old_bsb or l.new_bsb or l.old_account or l.new_account %}
+                <code>{{ l.old_bsb or 'None' }} / {{ l.old_account or 'None' }}</code> &rarr; <code>{{ l.new_bsb or 'None' }} / {{ l.new_account or 'None' }}</code>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td>{{ l.details }}</td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="muted" style="text-align: center; padding: 2rem;">
+              No creditor banking change events recorded yet.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+
+<!-- TAB 3: INVOICE TYPES -->
 <section class="tab-pane" id="tab-types">
   <article class="card">
     <header>
@@ -144,7 +204,7 @@
   </article>
 </section>
 
-<!-- TAB 3: RULES -->
+<!-- TAB 4: RULES -->
 <section class="tab-pane" id="tab-rules">
   <article class="card">
     <header>
@@ -199,7 +259,7 @@
   </article>
 </section>
 
-<!-- TAB 4: TEST MAPPER -->
+<!-- TAB 5: TEST MAPPER -->
 <section class="tab-pane" id="tab-test">
   <article class="card stack">
     <header>

@@ -46,7 +46,7 @@ from app.ollama_client import list_models, ping
 from app.sample import write_sample_invoice
 from app.search import execute_invoice_search, parse_natural_query
 from app.seed import seed_if_empty
-from app.services import apply_invoice_form, archive_posted_invoice, extract_invoice, ingest_inbox, ingest_pdf, log_audit_event
+from app.services import apply_invoice_form, log_creditor_audit, archive_posted_invoice, extract_invoice, ingest_inbox, ingest_pdf, log_audit_event
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["abn"] = lambda v: format_abn(v) if v else ""
@@ -567,11 +567,28 @@ def save_creditor(
     try:
         c = session.get(Creditor, creditor_id)
         if c:
+            new_clean_bsb = clean_bsb(bsb) if bsb else None
+            new_clean_acc = bank_account_number.strip() if bank_account_number else None
+            
+            # Audit log if bank details were altered
+            if c.bsb != new_clean_bsb or c.bank_account_number != new_clean_acc:
+                log_creditor_audit(
+                    session,
+                    creditor_id=c.id,
+                    action="MANUAL_BANK_UPDATE",
+                    user=user,
+                    old_bsb=c.bsb,
+                    new_bsb=new_clean_bsb,
+                    old_acc=c.bank_account_number,
+                    new_acc=new_clean_acc,
+                    details=f"Manual update by approver {user.username} in Mapping Studio.",
+                )
+
             c.default_account_id = int(default_account_id) if default_account_id else None
             c.gst_treatment = gst_treatment
             c.invoice_type_id = int(invoice_type_id) if invoice_type_id else None
-            c.bsb = clean_bsb(bsb) if bsb else None
-            c.bank_account_number = bank_account_number.strip() if bank_account_number else None
+            c.bsb = new_clean_bsb
+            c.bank_account_number = new_clean_acc
             c.bank_account_name = bank_account_name.strip() if bank_account_name else None
             c.notes = notes.strip()
             session.commit()
