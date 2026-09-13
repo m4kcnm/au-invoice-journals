@@ -155,6 +155,22 @@ class MappingRule(Base):
     invoice_type = relationship("InvoiceType")
 
 
+class PaymentBatch(Base):
+    __tablename__ = "payment_batches"
+
+    id = Column(Integer, primary_key=True)
+    batch_reference = Column(String(64), unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status = Column(String(32), default="exported", nullable=False)
+    total_amount = Column(Numeric(12, 2), default=Decimal("0.00"), nullable=False)
+    record_count = Column(Integer, default=0, nullable=False)
+    aba_content = Column(Text, nullable=False)
+
+    created_by = relationship("User")
+    invoices = relationship("Invoice", back_populates="payment_batch")
+
+
 class Invoice(Base):
     __tablename__ = "invoices"
 
@@ -165,6 +181,7 @@ class Invoice(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String(32), default="imported")
     payment_status = Column(String(32), default="unpaid", index=True)
+    payment_batch_id = Column(Integer, ForeignKey("payment_batches.id"), nullable=True, index=True)
 
     uploaded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     approved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -187,6 +204,7 @@ class Invoice(Base):
     invoice_type_id = Column(Integer, ForeignKey("invoice_types.id"), nullable=True)
 
     creditor = relationship("Creditor", back_populates="invoices")
+    payment_batch = relationship("PaymentBatch", back_populates="invoices")
     invoice_type = relationship("InvoiceType")
     lines = relationship("InvoiceLine", back_populates="invoice", cascade="all, delete-orphan")
     journals = relationship("Journal", back_populates="invoice", cascade="all, delete-orphan")
@@ -249,3 +267,12 @@ def account_by_code(session, code: str) -> Account | None:
 def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(ENGINE)
+
+    with ENGINE.connect() as conn:
+        cursor = conn.connection.cursor()
+        cursor.execute("PRAGMA table_info(invoices)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if "payment_batch_id" not in cols:
+            cursor.execute("ALTER TABLE invoices ADD COLUMN payment_batch_id INTEGER REFERENCES payment_batches(id)")
+            conn.connection.commit()
+        cursor.close()

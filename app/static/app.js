@@ -1,3 +1,23 @@
+// --- UNIFIED TOAST DISPATCHER ---
+(function dispatchToasts() {
+  const params = new URLSearchParams(window.location.search);
+  const toastKey = params.get("toast");
+  if (!toastKey) return;
+
+  const messages = {
+    posted: "Bill successfully approved & posted to General Ledger.",
+    deleted: "Bill permanently deleted from records.",
+    password_updated: "Password updated successfully.",
+    batch_voided: "Batch voided. Invoices returned to Ready to Pay queue."
+  };
+
+  if (messages[toastKey]) {
+    showToast(messages[toastKey], "success");
+    const cleanUrl = window.location.pathname + window.location.hash;
+    window.history.replaceState({}, document.title, cleanUrl);
+  }
+})();
+
 // --- SECURITY: CONTEXTUAL HTML ESCAPING ---
 function escapeHtml(str) {
   if (str === null || str === undefined) return "";
@@ -533,6 +553,45 @@ document.addEventListener("DOMContentLoaded", () => {
         window.location.href = res.url || "/invoices";
       } catch (err) {
         alert("Error submitting delete request: " + err.message);
+      }
+    });
+  });
+});
+
+// --- ABA POST EXPORT INTERCEPTOR ---
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll('[data-action="export-aba"]').forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      try {
+        const res = await fetch("/payments/aba", { method: "POST" });
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          const msg = data && data.error ? data.error : "Unable to export ABA file.";
+          alert(msg);
+          return;
+        }
+
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        let filename = "PAYRUN.aba";
+        const match = disposition.match(/filename=([^;]+)/);
+        if (match && match[1]) {
+          filename = match[1].replace(/["']/g, "").trim();
+        }
+
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+
+        setTimeout(() => window.location.reload(), 600);
+      } catch (err) {
+        alert("Network error attempting to export ABA file: " + err.message);
       }
     });
   });

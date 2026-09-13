@@ -12,6 +12,7 @@ import os
 import traceback
 from contextlib import asynccontextmanager
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import fitz
@@ -40,6 +41,7 @@ from app.models import (
     Creditor,
     CreditorAuditLog,
     Invoice,
+    PaymentBatch,
     InvoiceType,
     Journal,
     MappingRule,
@@ -260,17 +262,86 @@ def sample(bg: BackgroundTasks, user: User = Depends(get_current_user)):
     return RedirectResponse(f"/invoices/{inv.id}", status_code=303)
 
 
-@app.get("/invoices", response_class=HTMLResponse)
-def invoices_list(request: Request, user: User = Depends(get_current_user)):
+@app.get("/invoices")
+def invoices_redirect():
+    return RedirectResponse("/payments", status_code=303)
+
+
+@app.get("/payments", response_class=HTMLResponse)
+def payments_hub(request: Request, user: User = Depends(get_current_user)):
     session = SessionLocal()
     try:
-        rows = session.query(Invoice).order_by(Invoice.id.desc()).all()
-        return TEMPLATES.TemplateResponse("invoices.html", ctx(request, invoices=rows))
+        all_invoices = session.query(Invoice).order_by(Invoice.id.desc()).all()
+        draft_invoices = [inv for inv in all_invoices if inv.status != "posted"]
+        ready_invoices = [inv for inv in all_invoices if inv.status == "posted" and inv.payment_status != "batched"]
+        batches = session.query(PaymentBatch).order_by(PaymentBatch.id.desc()).all()
+
+        return TEMPLATES.TemplateResponse(
+            "payments.html",
+            ctx(
+                request,
+                all_invoices=all_invoices,
+                draft_invoices=draft_invoices,
+                ready_invoices=ready_invoices,
+                batches=batches,
+            ),
+        )
     finally:
         session.close()
 
 
-@app.get("/payments/aba")
+@app.get("/payments/batches/{batch_id}/aba")
+def download_historical_aba(batch_id: int, user: User = Depends(require_approver)):
+    session = SessionLocal()
+    try:
+        batch = session.get(PaymentBatch, batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="Payment batch not found.")
+        return Response(
+            content=batch.aba_content,
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename={batch.batch_reference}.aba"},
+        )
+    finally:
+        session.close()
+
+
+@app.post("/payments/batches/{batch_id}/void")
+def void_payment_batch(batch_id: int, user: User = Depends(require_approver)):
+    session = SessionLocal()
+    try:
+        batch = session.get(PaymentBatch, batch_id)
+        if not batch:
+            return RedirectResponse("/payments?error=Payment+batch+not+found#tab-batches", status_code=303)
+        if batch.status == "voided":
+            return RedirectResponse("/payments?error=Payment+batch+has+already+been+voided#tab-batches", status_code=303)
+
+        reverted_count = len(batch.invoices)
+        for inv in list(batch.invoices):
+            inv.payment_status = "unpaid"
+            inv.payment_batch_id = None
+            log_audit_event(
+                session,
+                "PAYMENT_UNBATCHED",
+                invoice_id=inv.id,
+                user=user,
+                details=f"Released from voided batch {batch.batch_reference}."
+            )
+
+        batch.status = "voided"
+        log_audit_event(
+            session,
+            "BATCH_VOIDED",
+            user=user,
+            details=f"Voided payment batch {batch.batch_reference} ({reverted_count} bills returned to settlement queue)."
+        )
+        session.commit()
+        return RedirectResponse("/payments?toast=batch_voided#tab-batches", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/payments/aba")
 def download_aba_file(user: User = Depends(require_approver)):
     session = SessionLocal()
     try:
@@ -305,33 +376,55 @@ def download_aba_file(user: User = Depends(require_approver)):
         except ValueError as err:
             return JSONResponse(status_code=400, content={"error": str(err)})
 
-        # Fail clean: If ANY invoice has invalid or missing bank details, abort entirely.
         if skipped_info:
             header_msg = "ABA Export Blocked - The following invoices are missing valid banking details:"
             lines = [f"- Bill #{iid} ({inv.supplier_name or 'Unknown'}): {reason}"
                      for iid, reason in skipped_info
                      for inv in invoices if inv.id == iid]
             footer_msg = "Please update the vendor bank details before exporting the pay run."
-            full_msg = header_msg + "\n\n" + "\n".join(lines) + "\n\n" + footer_msg
+            
+            # Use tuple join to avoid raw slash-n escape issues in bash heredocs
+            full_msg = chr(10).join([header_msg, ""] + lines + ["", footer_msg])
             return JSONResponse(status_code=400, content={"error": full_msg})
 
-        # Mark all as batched only once the entire batch has passed validation
-        for inv in invoices:
+        # Calculate metrics strictly from included_ids
+        batched_invoices = [inv for inv in invoices if inv.id in included_ids]
+        batch_total = sum(((inv.total or Decimal("0.00")) for inv in batched_invoices), Decimal("0.00"))
+
+        today_slug = date.today().strftime("%Y%m%d")
+        seq = session.query(PaymentBatch).filter(PaymentBatch.batch_reference.like(f"PAYRUN-{today_slug}%")).count() + 1
+        batch_ref = f"PAYRUN-{today_slug}-{seq:02d}"
+        while session.query(PaymentBatch).filter_by(batch_reference=batch_ref).first():
+            seq += 1
+            batch_ref = f"PAYRUN-{today_slug}-{seq:02d}"
+
+        batch = PaymentBatch(
+            batch_reference=batch_ref,
+            created_by_id=user.id,
+            status="exported",
+            total_amount=batch_total,
+            record_count=len(batched_invoices),
+            aba_content=aba_content,
+        )
+        session.add(batch)
+        session.flush()
+
+        for inv in batched_invoices:
             inv.payment_status = "batched"
+            inv.payment_batch_id = batch.id
             log_audit_event(
                 session,
                 "BATCHED_FOR_PAYMENT",
                 invoice_id=inv.id,
                 user=user,
-                details="Included in exported ABA pay run."
+                details=f"Included in ABA disbursement batch {batch_ref}."
             )
         session.commit()
 
-        today_str = date.today().strftime("%Y%m%d")
         return Response(
             content=aba_content,
             media_type="text/plain",
-            headers={"Content-Disposition": f"attachment; filename=PAYRUN_{today_str}.aba"},
+            headers={"Content-Disposition": f"attachment; filename={batch_ref}.aba"},
         )
     finally:
         session.close()
@@ -909,17 +1002,17 @@ def save_rule(
 ):
     session = SessionLocal()
     try:
-        session.add(
-            MappingRule(
-                name=name.strip(),
-                match_on=match_on,
-                pattern=pattern.strip(),
-                account_id=int(account_id) if account_id else None,
-                gst_treatment=gst_treatment,
-                invoice_type_id=int(invoice_type_id) if invoice_type_id else None,
-                priority=priority,
-            )
+        r = MappingRule(
+            name=name.strip(),
+            match_on=match_on,
+            pattern=pattern.strip(),
+            account_id=int(account_id) if account_id else None,
+            gst_treatment=gst_treatment,
+            invoice_type_id=int(invoice_type_id) if invoice_type_id else None,
+            priority=priority,
         )
+        session.add(r)
+        log_audit_event(session, "MAPPING_RULE_CREATED", user=user, details=f"Created routing rule '{name.strip()}' on {match_on}: {pattern.strip()}")
         session.commit()
     finally:
         session.close()
@@ -932,6 +1025,7 @@ def delete_rule(rule_id: int, user: User = Depends(require_approver)):
     try:
         r = session.get(MappingRule, rule_id)
         if r:
+            log_audit_event(session, "MAPPING_RULE_DELETED", user=user, details=f"Deleted routing rule '{r.name}' (ID #{r.id})")
             session.delete(r)
             session.commit()
     finally:
@@ -976,7 +1070,9 @@ def add_account(
 ):
     session = SessionLocal()
     try:
-        session.add(Account(code=code.strip(), name=name.strip(), type=type, gst_treatment=gst_treatment))
+        acc = Account(code=code.strip(), name=name.strip(), type=type, gst_treatment=gst_treatment)
+        session.add(acc)
+        log_audit_event(session, "GL_ACCOUNT_CREATED", user=user, details=f"Created ledger account {code.strip()} ({name.strip()})")
         session.commit()
     finally:
         session.close()

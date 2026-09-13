@@ -64,6 +64,8 @@ def build_journal_preview(session, invoice: Invoice) -> dict:
 
     for line in invoice.lines:
         mapped = resolve_mapping(session, invoice, line)
+        if mapped.get("gst_treatment") == "requires_review":
+            warnings.append(f"Posting is blocked: GST treatment on line '{line.description or 'Item'}' requires explicit verification.")
         treatment = mapped["gst_treatment"]
         amount = money(line.amount)
         gst_hint = money(line.gst_amount) if money(line.gst_amount) else None

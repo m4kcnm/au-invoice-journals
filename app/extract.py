@@ -233,7 +233,8 @@ def regex_fallback_extract(text: str) -> dict[str, Any]:
     gst = gst_val or Decimal("0.00")
 
     is_gst_free = any(w in text.lower() for w in ("sa water", "water charges", "rates", "council rate", "gst-free", "gst free"))
-    if not is_gst_free and gst == 0 and total > 0:
+    has_taxable_keyword = any(w in text.lower() for w in ("tax invoice", "includes gst", "inc gst", "gst included"))
+    if not is_gst_free and gst == 0 and total > 0 and has_taxable_keyword:
         gst = gst_from_inclusive(total)
 
     sub = total - gst
@@ -354,19 +355,29 @@ def normalize_extracted(data: dict[str, Any], raw_text: str) -> dict[str, Any]:
         if not desc and amt == 0:
             continue
         ln_gst = gst if (len(raw_lines) <= 1 and gst > 0) else money(ln.get("gst_amount") or (Decimal("0.00") if is_water_or_rates else gst_from_inclusive(amt)))
+        assigned_treatment = ln.get("gst_treatment")
+        if not assigned_treatment:
+            if is_water_or_rates:
+                assigned_treatment = "gst_free"
+            elif ln_gst > Decimal("0.00"):
+                assigned_treatment = "taxable"
+            else:
+                assigned_treatment = "requires_review"
+
         norm_lines.append({
             "description": desc or "Item",
             "amount": amt,
             "gst_amount": ln_gst,
-            "gst_treatment": "gst_free" if (is_water_or_rates or ln_gst == 0) else (ln.get("gst_treatment") or "taxable"),
+            "gst_treatment": assigned_treatment,
         })
 
     if not norm_lines and total > 0:
+        fallback_treatment = "gst_free" if is_water_or_rates else ("taxable" if gst > Decimal("0.00") else "requires_review")
         norm_lines = [{
             "description": str(data.get("supplier_name") or "Invoice supply charges"),
             "amount": total,
             "gst_amount": gst,
-            "gst_treatment": "gst_free" if is_water_or_rates else "taxable",
+            "gst_treatment": fallback_treatment,
         }]
     elif len(norm_lines) == 1 and norm_lines[0]["amount"] != total:
         if abs((norm_lines[0]["amount"] + gst) - total) <= Decimal("0.05"):

@@ -13,6 +13,7 @@ GST_RATE = Decimal("0.10")
 TAX_FRACTION = Decimal("1") / Decimal("11")  # GST component of an inclusive price
 
 TREATMENTS = (
+    "requires_review",
     "taxable",
     "gst_free",
     "input_taxed",
@@ -96,6 +97,10 @@ def bas_labels(treatment: str, is_purchase: bool = True) -> tuple[str, str | Non
         return "G1", "1A"
     if treatment == "capital":
         return "G10", "1B"
+    if treatment == "requires_review":
+        # GST unverified: do not recognize input tax credit until verified
+        return amount, Decimal("0.00"), amount
+
     if treatment == "gst_free":
         return "G14", None
     if treatment == "input_taxed":

@@ -16,13 +16,13 @@ def seed_if_empty() -> None:
                     username="clerk",
                     full_name="Accounts Clerk",
                     role="operator",
-                    password_hash=hash_password(os.getenv("DEFAULT_CLERK_PASSWORD", "clerk-pass-2026")),
+                    password_hash=hash_password(os.getenv("DEFAULT_CLERK_PASSWORD", "password123")),
                 ),
                 User(
                     username="manager",
                     full_name="Financial Controller",
                     role="approver",
-                    password_hash=hash_password(os.getenv("DEFAULT_MANAGER_PASSWORD", "manager-pass-2026")),
+                    password_hash=hash_password(os.getenv("DEFAULT_MANAGER_PASSWORD", "password123")),
                 ),
             ])
             session.commit()
@@ -33,7 +33,7 @@ def seed_if_empty() -> None:
                 Setting(key="entity_name", value="My Australian Business Pty Ltd"),
                 Setting(key="gst_registered", value="true"),
                 Setting(key="accounting_basis", value="accrual"),
-                Setting(key="ollama_url", value="http://127.0.0.1:11434"),
+                Setting(key="ollama_url", value=os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")),
                 Setting(key="ollama_model", value=""),
             ])
             session.commit()

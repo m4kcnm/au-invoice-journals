@@ -24,7 +24,7 @@
       </div>
       <nav class="main-nav">
         <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
-        <a href="/invoices" class="{% if request.url.path.startswith('/invoices') %}active{% endif %}">Bills to Pay</a>
+        <a href="/payments" class="{% if request.url.path.startswith('/payments') or request.url.path.startswith('/invoices') %}active{% endif %}">Payments Hub</a>
         <a href="/creditors" class="{% if request.url.path.startswith('/creditors') %}active{% endif %}">Creditors</a>
         <a href="/search" class="{% if request.url.path.startswith('/search') %}active{% endif %}">Search</a>
         <a href="/mapping" class="{% if request.url.path.startswith('/mapping') %}active{% endif %}">Mapping Studio</a>
