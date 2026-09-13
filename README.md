@@ -35,7 +35,7 @@ An automated Accounts Payable (AP) and Tax Invoice processing system designed fo
 * **Backend Framework:** FastAPI (Python 3.11) with Uvicorn
 * **Database & ORM:** SQLite with SQLAlchemy 2.0 (configured with `PRAGMA journal_mode=DELETE` for robust cross-platform container volume compatibility)
 * **Document Processing:** PyMuPDF (`fitz`), Python-dateutil
-* **Local Inference:** Ollama API (`qwen2.5:3b`, `qwen2.5-vl:latest`)
+* **Local Inference: Ollama API (qwen3.5:4b, qwen2.5:3b, qwen2.5-vl)
 * **Templating & UI:** Jinja2, vanilla responsive CSS, and lightweight vanilla JavaScript
 
 ---
@@ -63,3 +63,33 @@ An automated Accounts Payable (AP) and Tax Invoice processing system designed fo
 ├── Dockerfile              # Container build specifications
 ├── requirements.txt        # Python package dependencies
 └── README.md
+
+## Directory Structure
+
+```text
+.
+├── app/
+│   ├── abn.py              # ATO Modulus 89 validation algorithm
+│   ├── aba.py              # APCA Direct Entry (ABA) export file generator
+│   ├── auth.py             # PBKDF2 hashing, signed session tokens, RBAC dependencies
+│   ├── extract.py          # Multi-layout regex & Ollama AI extraction engine
+│   ├── gst.py              # Australian GST calculation, splitting & statutory guards
+│   ├── journals.py         # Double-entry general ledger balance & posting safeguards
+│   ├── mappings.py         # Heuristic GL account rule engine & priority matcher
+│   ├── models.py           # SQLAlchemy schema, payment batches & audit definitions
+│   ├── ollama_client.py    # Local inference client with structured JSON schema
+│   ├── search.py           # Tokenized invoice & ledger query parser
+│   ├── seed.py             # Default chart of accounts, routing rules & demo users
+│   ├── services.py         # Business operations, file storage & state transitions
+│   ├── web.py              # FastAPI routes, lifecycle endpoints & view controllers
+│   ├── static/             # Vanilla CSS styles and interactive JavaScript (app.js)
+│   └── templates/          # Jinja2 views (payments, creditors, journals, audit)
+├── data/                   # SQLite database and document storage (git-ignored)
+├── inbox/                  # Monitored directory for automated batch ingestion
+├── docker-compose.yml      # Container orchestration definition
+├── Dockerfile              # Container build specifications
+├── requirements.txt        # Python package dependencies
+├── run.py                  # Local Python server entrypoint
+├── start.sh                # Local convenience launch script
+└── README.md
+```
