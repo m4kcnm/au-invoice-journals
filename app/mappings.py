@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.abn import digits_only
 from app.gst import infer_treatment_from_text
-from app.models import Account, Creditor, Invoice, InvoiceLine, InvoiceType, MappingRule, account_by_code
+from app.models import Account, Creditor, Invoice, InvoiceLine, InvoiceType, MappingRule
 
 
 def _ci_contains(hay: str, needle: str) -> bool:
@@ -56,11 +56,9 @@ def match_rule(session, invoice: Invoice, line: InvoiceLine | None, cached_rules
 
 
 def resolve_mapping(session, invoice: Invoice, line: InvoiceLine | None = None, cached_rules: list[MappingRule] | None = None) -> dict:
-    unallocated = (
-        account_by_code(session, "6-9000")
-        or account_by_code(session, "6-1300")
-        or session.query(Account).filter_by(type="expense", archived=False).first()
-    )
+    # Unmapped lines must remain unallocated. Posting code will reject them rather than
+    # silently routing spend into a real expense ledger.
+    unallocated = None
 
     account = None
     treatment = ""

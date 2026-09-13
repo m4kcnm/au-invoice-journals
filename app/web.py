@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
+
 import uuid
+import urllib.parse
 
 import csv
 import io
@@ -27,9 +30,9 @@ from app.auth import (
     require_approver,
     verify_password,
 )
-from app.config import INBOX_DIR, ROOT
+from app.config import INBOX_DIR
 from app.gst import TREATMENT_LABELS, TREATMENTS
-from app.journals import build_journal_preview, persist_journal
+from app.journals import build_journal_preview, persist_journal, transition_invoice
 from app.mappings import preview_resolution
 from app.models import (
     Account,
@@ -85,24 +88,34 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 
 @app.exception_handler(HTTPException)
 async def auth_exception_handler(request: Request, exc: HTTPException):
+    # 1. Authentication redirects
     if exc.status_code == 401:
         if request.url.path.startswith("/api/") or request.url.path.endswith("/status"):
             return JSONResponse(status_code=401, content={"error": "Unauthorized"})
         return RedirectResponse(url="/login", status_code=303)
 
-    if exc.status_code == 403:
-        return HTMLResponse(
-            status_code=403,
-            content=f"""
-            <div style="font-family: system-ui; max-width: 500px; margin: 4rem auto; padding: 2rem; border: 1px solid #d8e0e6; border-radius: 8px;">
-              <h2 style="color: #c02b0a; margin-top: 0;">Access Restricted</h2>
-              <p>{exc.detail}</p>
-              <p><a href="/" style="color: #002f48; font-weight: 600;">&larr; Return to Dashboard</a></p>
-            </div>
-            """,
-        )
+    # 2. Return JSON only for pure API fetch requests
+    is_ajax = request.headers.get("x-requested-with") == "XMLHttpRequest"
+    accept = request.headers.get("accept", "")
+    if request.url.path.startswith("/api/") or ("application/json" in accept and not "text/html" in accept) or is_ajax:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    # 3. For all browser form POSTs and navigations, redirect back with error popup parameter
+    referer = request.headers.get("referer")
+    if referer:
+        base_url = referer.split("?")[0]
+        return RedirectResponse(f"{base_url}?error={urllib.parse.quote(str(exc.detail))}", status_code=303)
+
+    return HTMLResponse(
+        status_code=exc.status_code,
+        content=f"""
+        <div style="font-family: system-ui; max-width: 520px; margin: 4rem auto; padding: 2rem; border: 1px solid #d8e0e6; border-radius: 8px;">
+          <h2 style="color: #c02b0a; margin-top: 0;">Notice</h2>
+          <p>{exc.detail}</p>
+          <p><a href="/" style="color: #002f48; font-weight: 600;">&larr; Return to Dashboard</a></p>
+        </div>
+        """,
+    )
 
 
 def ctx(request: Request, **extra):
@@ -201,11 +214,24 @@ def dashboard(request: Request, user: User = Depends(get_current_user)):
         session.close()
 
 
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+
 @app.post("/upload")
 def upload(bg: BackgroundTasks, file: UploadFile = File(...), user: User = Depends(get_current_user)):
-    data = file.file.read()
-    # Strip any user-supplied directory traversal components
+    # Keep the demo deliberately small and fail closed on non-PDF uploads.
     safe_name = Path(file.filename or "upload.pdf").name
+    declared_type = (file.content_type or "").lower()
+    if declared_type not in {"application/pdf", ""} and not safe_name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF invoice uploads are supported.")
+
+    data = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="PDF upload exceeds the 15 MB demo limit.")
+    if not data.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF document.")
+
+    # Strip any user-supplied directory traversal components
     clean_stem = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", safe_name)
     secure_disk_name = f"{uuid.uuid4().hex}_{clean_stem}"
     tmp = INBOX_DIR / secure_disk_name
@@ -256,12 +282,10 @@ def download_aba_file(user: User = Depends(require_approver)):
         )
 
         if not invoices:
-            return Response(content="No unbatched posted invoices available for ABA export.", media_type="text/plain")
-
-        for inv in invoices:
-            inv.payment_status = "batched"
-            log_audit_event(session, "BATCHED_FOR_PAYMENT", invoice_id=inv.id, user=user, details="Included in exported ABA pay run.")
-        session.commit()
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No unbatched posted invoices available for ABA export."}
+            )
 
         bank_code = get_setting(session, "bank_code", "PCU")
         user_name = get_setting(session, "entity_name", "My Australian Business")
@@ -269,14 +293,39 @@ def download_aba_file(user: User = Depends(require_approver)):
         bsb = get_setting(session, "remitter_bsb", "085-005")
         acc = get_setting(session, "remitter_account", "123456789")
 
-        aba_content = generate_aba_file(
-            invoices,
-            bank_code=bank_code,
-            user_name=user_name,
-            user_apca_number=apca,
-            remitter_bsb=bsb,
-            remitter_account=acc,
-        )
+        try:
+            aba_content, included_ids, skipped_info = generate_aba_file(
+                invoices,
+                bank_code=bank_code,
+                user_name=user_name,
+                user_apca_number=apca,
+                remitter_bsb=bsb,
+                remitter_account=acc,
+            )
+        except ValueError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+
+        # Fail clean: If ANY invoice has invalid or missing bank details, abort entirely.
+        if skipped_info:
+            header_msg = "ABA Export Blocked - The following invoices are missing valid banking details:"
+            lines = [f"- Bill #{iid} ({inv.supplier_name or 'Unknown'}): {reason}"
+                     for iid, reason in skipped_info
+                     for inv in invoices if inv.id == iid]
+            footer_msg = "Please update the vendor bank details before exporting the pay run."
+            full_msg = header_msg + "\n\n" + "\n".join(lines) + "\n\n" + footer_msg
+            return JSONResponse(status_code=400, content={"error": full_msg})
+
+        # Mark all as batched only once the entire batch has passed validation
+        for inv in invoices:
+            inv.payment_status = "batched"
+            log_audit_event(
+                session,
+                "BATCHED_FOR_PAYMENT",
+                invoice_id=inv.id,
+                user=user,
+                details="Included in exported ABA pay run."
+            )
+        session.commit()
 
         today_str = date.today().strftime("%Y%m%d")
         return Response(
@@ -410,7 +459,9 @@ def invoice_extract(bg: BackgroundTasks, invoice_id: int, user: User = Depends(g
     try:
         inv = session.get(Invoice, invoice_id)
         if inv:
-            inv.status = "imported"
+            if inv.status == "posted":
+                raise HTTPException(status_code=400, detail="Posted invoices cannot be re-extracted.")
+            transition_invoice(inv, "imported")
             log_audit_event(session, "RE_EXTRACTED", invoice_id=invoice_id, user=user, details="Triggered AI re-extraction")
             session.commit()
     finally:
@@ -463,7 +514,7 @@ async def invoice_save(request: Request, invoice_id: int, user: User = Depends(g
     try:
         apply_invoice_form(invoice_id, form, user=user)
     except ValueError as val_err:
-        raise HTTPException(status_code=400, detail=str(val_err))
+        return RedirectResponse(f"/invoices/{invoice_id}?error={urllib.parse.quote(str(val_err))}", status_code=303)
     return RedirectResponse(f"/invoices/{invoice_id}", status_code=303)
 
 
@@ -478,7 +529,7 @@ async def invoice_journal(
     try:
         apply_invoice_form(invoice_id, form, user=user)
     except ValueError as val_err:
-        raise HTTPException(status_code=400, detail=str(val_err))
+        return RedirectResponse(f"/invoices/{invoice_id}?error={urllib.parse.quote(str(val_err))}", status_code=303)
 
     session = SessionLocal()
     try:
@@ -491,7 +542,11 @@ async def invoice_journal(
                 )
 
             inv.approved_by_id = user.id
-            persist_journal(session, inv, post=True)
+            try:
+                persist_journal(session, inv, post=True)
+            except ValueError as post_err:
+                session.rollback()
+                return RedirectResponse(f"/invoices/{invoice_id}?error={urllib.parse.quote(str(post_err))}", status_code=303)
             log_audit_event(session, "APPROVED_AND_POSTED", invoice_id=invoice_id, user=user, details="Posted purchase journal to General Ledger.")
             session.commit()
             archive_posted_invoice(invoice_id)
@@ -515,6 +570,8 @@ def invoice_delete(invoice_id: int, user: User = Depends(require_approver)):
     try:
         inv = session.get(Invoice, invoice_id)
         if inv:
+            if inv.status == "posted":
+                raise HTTPException(status_code=400, detail="Posted invoices cannot be deleted. Use a reversal/void workflow instead.")
             log_audit_event(session, "DELETED", invoice_id=invoice_id, user=user, details=f"Deleted invoice #{inv.invoice_number}")
             if inv.stored_path and os.path.exists(inv.stored_path):
                 try:
@@ -678,6 +735,9 @@ def delete_creditor(creditor_id: int, user: User = Depends(require_approver)):
     try:
         c = session.get(Creditor, creditor_id)
         if c:
+            for log in list(c.audit_logs):
+                log.creditor_id = None
+            log_creditor_audit(session, creditor_id=None, action="CREDITOR_DELETED", user=user, details=f"Deleted creditor profile '{c.name}' (ABN: {c.abn or 'None'}).")
             for inv in session.query(Invoice).filter_by(creditor_id=creditor_id):
                 inv.creditor_id = None
             session.delete(c)
@@ -950,17 +1010,21 @@ def journal_csv(journal_id: int, user: User = Depends(get_current_user)):
     session = SessionLocal()
     try:
         j = session.get(Journal, journal_id)
+        def csv_safe(value) -> str:
+            text = "" if value is None else str(value)
+            return "\t" + text if text.startswith(("=", "+", "-", "@")) else text
+
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["Date", "Narration", "Account code", "Account name", "Description", "Debit", "Credit", "GST treatment", "BAS"])
         for ln in j.lines:
             w.writerow(
                 [
-                    j.date.isoformat() if j.date else "",
-                    j.narration,
-                    ln.account.code,
-                    ln.account.name,
-                    ln.description,
+                    csv_safe(j.date.isoformat() if j.date else ""),
+                    csv_safe(j.narration),
+                    csv_safe(ln.account.code),
+                    csv_safe(ln.account.name),
+                    csv_safe(ln.description),
                     f"{ln.debit:.2f}",
                     f"{ln.credit:.2f}",
                     ln.gst_treatment,
@@ -1018,6 +1082,13 @@ def save_settings(
 ):
     session = SessionLocal()
     try:
+        setting_keys = [
+            "entity_name", "gst_registered", "accounting_basis", "bank_code",
+            "user_apca_number", "remitter_bsb", "remitter_account",
+            "ollama_url", "ollama_model",
+        ]
+        before = {key: get_setting(session, key) for key in setting_keys}
+
         set_setting(session, "entity_name", entity_name)
         set_setting(session, "gst_registered", "true" if gst_registered == "true" else "false")
         set_setting(session, "accounting_basis", accounting_basis)
@@ -1027,7 +1098,34 @@ def save_settings(
         set_setting(session, "remitter_account", remitter_account.strip())
         set_setting(session, "ollama_url", ollama_url.strip())
         set_setting(session, "ollama_model", ollama_model.strip())
+
+        after = {key: get_setting(session, key) for key in setting_keys}
+        changed = {key: {"before": before[key], "after": after[key]} for key in setting_keys if before[key] != after[key]}
+        if changed:
+            changed_text = json.dumps(changed, sort_keys=True)
+            log_audit_event(session, "SETTINGS_CHANGED", user=user, details=changed_text[:4000])
         session.commit()
     finally:
         session.close()
     return RedirectResponse("/settings", status_code=303)
+
+@app.post("/change-password")
+def change_password(
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    user: User = Depends(get_current_user),
+):
+    session = SessionLocal()
+    try:
+        db_user = session.get(User, user.id)
+        if not db_user or not verify_password(current_password, db_user.password_hash):
+            raise HTTPException(status_code=400, detail="Current password incorrect.")
+        if len(new_password) < 8:
+            raise HTTPException(status_code=400, detail="New password must be at least 8 characters.")
+        from app.auth import hash_password
+        db_user.password_hash = hash_password(new_password)
+        log_audit_event(session, "PASSWORD_CHANGED", user=user, details="User updated password.")
+        session.commit()
+        return RedirectResponse("/?toast=password_updated", status_code=303)
+    finally:
+        session.close()

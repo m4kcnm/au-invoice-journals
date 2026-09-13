@@ -3,7 +3,6 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
 
 from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, create_engine, event
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker

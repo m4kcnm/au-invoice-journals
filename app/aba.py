@@ -9,17 +9,19 @@ from app.models import Invoice
 
 
 def clean_bsb(bsb: str | None) -> str:
-    """Returns 6 digits formatted as XXX-XXX."""
+    """Returns 6 digits formatted as XXX-XXX, or empty string if invalid."""
     digits = re.sub(r"\D", "", bsb or "")
     if len(digits) == 6:
         return f"{digits[:3]}-{digits[3:]}"
-    return "000-000"
+    return ""
 
 
 def clean_account_num(acc: str | None) -> str:
-    """Returns right-aligned account number padded up to 9 chars."""
+    """Returns 1-9 digits, or empty string if invalid."""
     digits = re.sub(r"\D", "", acc or "")
-    return digits[:9]
+    if 1 <= len(digits) <= 9:
+        return digits
+    return ""
 
 
 def generate_aba_file(
@@ -31,7 +33,11 @@ def generate_aba_file(
     remitter_bsb: str,
     remitter_account: str,
     processing_date: date | None = None,
-) -> str:
+) -> tuple[str, list[int], list[tuple[int, str]]]:
+    """
+    Generates an APCA Direct Entry (ABA) text file.
+    Returns: (file_content, included_invoice_ids, skipped_invoices_with_reasons)
+    """
     p_date = processing_date or date.today()
     date_str = p_date.strftime("%d%m%y")
 
@@ -57,21 +63,40 @@ def generate_aba_file(
     lines = [header]
     total_cents = 0
     record_count = 0
+    included_ids: list[int] = []
+    skipped: list[tuple[int, str]] = []
 
     clean_remitter_bsb = clean_bsb(remitter_bsb)
-    clean_remitter_acc = clean_account_num(remitter_account).rjust(9)
+    clean_remitter_acc_raw = clean_account_num(remitter_account)
+    if not clean_remitter_bsb:
+        raise ValueError("ABA export rejected: remitter BSB must contain exactly 6 digits.")
+    if not clean_remitter_acc_raw:
+        raise ValueError("ABA export rejected: remitter account number must contain 1-9 digits.")
+    clean_remitter_acc = clean_remitter_acc_raw.rjust(9)
 
     for inv in invoices:
         cred = inv.creditor
-        if not cred or not cred.bsb or not cred.bank_account_number:
+        if not cred:
+            skipped.append((inv.id, "No creditor associated with invoice"))
+            continue
+        if not cred.bsb or not cred.bank_account_number:
+            skipped.append((inv.id, f"Creditor '{cred.name}' missing verified BSB or account number"))
             continue
 
         amount_cents = int(round(Decimal(str(inv.total or 0)) * 100))
         if amount_cents <= 0:
+            skipped.append((inv.id, f"Invoice total non-positive (${inv.total})"))
             continue
 
         target_bsb = clean_bsb(cred.bsb)
-        target_acc = clean_account_num(cred.bank_account_number).rjust(9)
+        target_acc_raw = clean_account_num(cred.bank_account_number)
+        if not target_bsb:
+            skipped.append((inv.id, f"Creditor '{cred.name}' has an invalid BSB; must contain exactly 6 digits"))
+            continue
+        if not target_acc_raw:
+            skipped.append((inv.id, f"Creditor '{cred.name}' has an invalid account number; must contain 1-9 digits"))
+            continue
+        target_acc = target_acc_raw.rjust(9)
         tax_indicator = " "
         txn_code = "50"
         amt_padded = str(amount_cents).zfill(10)
@@ -100,6 +125,7 @@ def generate_aba_file(
 
         total_cents += amount_cents
         record_count += 1
+        included_ids.append(inv.id)
 
     net_total_padded = str(total_cents).zfill(10)
     count_padded = str(record_count).zfill(6)
@@ -119,4 +145,4 @@ def generate_aba_file(
         raise ValueError(f"ABA Trailer must be exactly 120 characters, got {len(trailer)}")
     lines.append(trailer)
 
-    return "\r\n".join(lines) + "\r\n"
+    return ("\r\n".join(lines) + "\r\n", included_ids, skipped)

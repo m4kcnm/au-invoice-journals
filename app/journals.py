@@ -6,7 +6,25 @@ from decimal import Decimal
 from app.abn import is_valid_abn
 from app.gst import bas_labels, money, split_line
 from app.mappings import resolve_mapping
-from app.models import Account, Invoice, Journal, JournalLine, SessionLocal, account_by_code
+from app.models import Account, Invoice, Journal, JournalLine, account_by_code
+
+ALLOWED_INVOICE_TRANSITIONS = {
+    "imported": {"extracted", "failed", "reviewed"},
+    "extracted": {"imported", "reviewed", "failed"},
+    "reviewed": {"imported", "reviewed", "posted", "failed"},
+    "failed": {"imported", "extracted", "reviewed"},
+    "posted": set(),
+}
+
+
+def transition_invoice(invoice: Invoice, new_status: str) -> None:
+    """Apply an explicit invoice lifecycle transition and fail closed on invalid moves."""
+    current = invoice.status or "imported"
+    allowed = ALLOWED_INVOICE_TRANSITIONS.get(current, set())
+    if new_status != current and new_status not in allowed:
+        raise ValueError(f"Invalid invoice status transition: {current} -> {new_status}")
+    invoice.status = new_status
+
 
 
 def get_ap_account(session) -> Account | None:
@@ -186,6 +204,11 @@ def build_journal_preview(session, invoice: Invoice) -> dict:
                 total_dr += abs(diff)
 
     warnings = []
+    unallocated_count = sum(1 for line in invoice.lines if resolve_mapping(session, invoice, line)["account"] is None)
+    if unallocated_count:
+        warnings.append(
+            f"{unallocated_count} invoice line(s) have no mapped GL account. Posting is blocked until they are allocated."
+        )
     if invoice.supplier_abn and len(invoice.supplier_abn) == 11:
         if not is_valid_abn(invoice.supplier_abn):
             warnings.append("Supplier ABN fails the ATO checksum — check before claiming GST credits.")
@@ -207,6 +230,12 @@ def build_journal_preview(session, invoice: Invoice) -> dict:
 
 def persist_journal(session, invoice: Invoice, *, post: bool) -> Journal:
     preview = build_journal_preview(session, invoice)
+    if post and not preview.get("balanced"):
+        raise ValueError(
+            f"Posting Rejected: Journal is out of balance (Debits: ${preview.get('total_dr')}, Credits: ${preview.get('total_cr')})."
+        )
+    if post and any("Posting is blocked" in warning for warning in preview.get("warnings", [])):
+        raise ValueError("Posting Rejected: every invoice line must resolve to an explicit GL account before posting.")
 
     # Upsert draft journal if one already exists for this invoice
     j = (
@@ -245,6 +274,6 @@ def persist_journal(session, invoice: Invoice, *, post: bool) -> Journal:
             )
         )
 
-    invoice.status = "posted" if post else "reviewed"
+    transition_invoice(invoice, "posted" if post else "reviewed")
     session.flush()
     return j

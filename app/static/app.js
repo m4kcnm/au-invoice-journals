@@ -1,3 +1,14 @@
+// --- SECURITY: CONTEXTUAL HTML ESCAPING ---
+function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 // --- TOAST NOTIFICATIONS ---
 function showToast(message, type = "success") {
   const toast = document.createElement("div");
@@ -157,7 +168,7 @@ function initInvoiceDetail() {
 
     if (warningsContainer) {
       warningsContainer.innerHTML = (data.warnings || [])
-        .map((w) => `<div class="alert" style="margin-bottom: 0.6rem;">${w}</div>`)
+        .map((w) => `<div class="alert" style="margin-bottom: 0.6rem;">${escapeHtml(w)}</div>`)
         .join("");
     }
 
@@ -166,9 +177,9 @@ function initInvoiceDetail() {
         .map(
           (ln) => `
         <tr>
-          <td><strong>${ln.account_code}</strong> ${ln.account_name}</td>
-          <td>${ln.description}</td>
-          <td><span class="tag" style="background: #edf2f7;">${ln.bas_label || "—"}</span></td>
+          <td><strong>${escapeHtml(ln.account_code)}</strong> ${escapeHtml(ln.account_name)}</td>
+          <td>${escapeHtml(ln.description)}</td>
+          <td><span class="tag" style="background: #edf2f7;">${escapeHtml(ln.bas_label) || "—"}</span></td>
           <td style="text-align: right;">${ln.debit}</td>
           <td style="text-align: right;">${ln.credit}</td>
         </tr>
@@ -300,9 +311,9 @@ function initSmartSearch() {
           <tr>
             <td><a href="/invoices/${inv.id}"><strong>#${inv.id}</strong></a></td>
             <td>${inv.date}</td>
-            <td><a href="/invoices/${inv.id}"><strong>${inv.supplier}</strong></a></td>
-            <td>${inv.invoice_number}</td>
-            <td><span class="tag" style="background: #edf2f7; text-transform: none;">${inv.ledger}</span></td>
+            <td><a href="/invoices/${inv.id}"><strong>${escapeHtml(inv.supplier)}</strong></a></td>
+            <td>${escapeHtml(inv.invoice_number)}</td>
+            <td><span class="tag" style="background: #edf2f7; text-transform: none;">${escapeHtml(inv.ledger)}</span></td>
             <td style="text-align: right;">${inv.gst_amount}</td>
             <td style="text-align: right;"><strong>${inv.total}</strong></td>
             <td style="text-align: center;"><span class="tag ${inv.status}">${inv.status}</span></td>
@@ -314,7 +325,7 @@ function initSmartSearch() {
         resultsBody.innerHTML = `
           <tr>
             <td colspan="8" class="muted" style="text-align: center; padding: 2.5rem;">
-              No invoices found matching "<strong>${query}</strong>".
+              No invoices found matching "<strong>${escapeHtml(query)}</strong>".
             </td>
           </tr>
         `;
@@ -430,4 +441,99 @@ document.addEventListener("DOMContentLoaded", () => {
   initTestMapper();
   initInvoiceDetail();
   initSmartSearch();
+});
+
+// --- ABA DOWNLOAD INTERCEPTOR ---
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll('a[href="/payments/aba"]').forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      try {
+        const res = await fetch("/payments/aba");
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          const msg = data && data.error ? data.error : "Unable to export ABA file.";
+          alert(msg);
+          return;
+        }
+
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        let filename = "PAYRUN.aba";
+        const match = disposition.match(/filename=([^;]+)/);
+        if (match && match[1]) {
+          filename = match[1].replace(/["']/g, "").trim();
+        }
+
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+
+        setTimeout(() => window.location.reload(), 600);
+      } catch (err) {
+        alert("Network error attempting to export ABA file: " + err.message);
+      }
+    });
+  });
+});
+
+
+// --- INVOICE DELETE INTERCEPTOR & URL ERROR TOAST ---
+document.addEventListener("DOMContentLoaded", () => {
+  // Check URL query parameters for redirected error messages
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("error")) {
+    alert(params.get("error"));
+    // Clean URL without reloading
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, document.title, cleanUrl);
+  }
+
+  // Intercept any delete button forms
+  document.querySelectorAll('form[action*="/delete"]').forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      
+      const isInvoice = form.action.includes("/invoices/");
+      const confirmMsg = isInvoice
+        ? "Are you sure you want to delete this invoice? This action cannot be undone."
+        : "Are you sure you want to delete this record?";
+        
+      if (!confirm(confirmMsg)) {
+        return;
+      }
+
+      try {
+        const res = await fetch(form.action, {
+          method: "POST",
+          headers: { "X-Requested-With": "XMLHttpRequest" }
+        });
+
+        // If server redirected back to an error parameter
+        if (res.redirected && res.url.includes("error=")) {
+          const urlObj = new URL(res.url);
+          const errorMsg = urlObj.searchParams.get("error");
+          alert(decodeURIComponent(errorMsg).replace(/\+/g, " "));
+          return;
+        }
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          const msg = data && data.detail ? data.detail : "Deletion failed.";
+          alert(msg);
+          return;
+        }
+
+        // On successful deletion redirect to the destination URL
+        window.location.href = res.url || "/invoices";
+      } catch (err) {
+        alert("Error submitting delete request: " + err.message);
+      }
+    });
+  });
 });

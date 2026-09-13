@@ -10,11 +10,27 @@ import time
 from typing import Any
 
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse
 from app.models import SessionLocal, User
 
 SESSION_COOKIE_NAME = "gl_session"
-SECRET_KEY = os.getenv("APP_SECRET_KEY", "au-journals-session-secret-key-9921")
+from app.config import DATA_DIR
+
+def _load_or_create_secret_key() -> str:
+    env_secret = os.getenv("APP_SECRET_KEY")
+    if env_secret:
+        return env_secret.strip()
+    key_file = DATA_DIR / ".secret_key"
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if key_file.exists():
+            return key_file.read_text(encoding="utf-8").strip()
+        new_key = secrets.token_hex(32)
+        key_file.write_text(new_key, encoding="utf-8")
+        return new_key
+    except Exception:
+        return "fallback-ephemeral-key-" + secrets.token_hex(16)
+
+SECRET_KEY = _load_or_create_secret_key()
 
 
 def hash_password(password: str) -> str:

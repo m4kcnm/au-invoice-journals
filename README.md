@@ -1,6 +1,6 @@
 Australian Accounts Payable & General Ledger Automation
 
-An automated Accounts Payable (AP) and Tax Invoice processing system designed for Australian bookkeeping workflows. The platform combines deterministic heuristics and local AI extraction to validate Australian Business Numbers (ABNs), compute Goods and Services Tax (GST) allocations, match vendor banking details, maintain complete audit trails, and prepare ABA disbursement files for Australian banks.
+An automated Accounts Payable (AP) and Tax Invoice processing system designed for Australian bookkeeping workflows. The platform combines deterministic heuristics and local AI extraction to validate Australian Business Numbers (ABNs), compute Goods and Services Tax (GST) allocations, match vendor banking details, maintain central audit history, and prepare ABA disbursement files for Australian banks.
 
 ---
 
@@ -22,10 +22,10 @@ An automated Accounts Payable (AP) and Tax Invoice processing system designed fo
 * **ABA Payment File Generation:** Generates compliant Australian Payments Clearing Association (APCA) / Direct Entry text files for batch upload to corporate banking portals (e.g., NAB Connect, CommBiz, ANZ Transactive).
 
 ### 4. Governance & Security
-* **Role-Based Separation of Duties:**
+* **Role-Based Workflow:**
   * `clerk`: Document upload, text extraction review, and draft maintenance.
   * `manager`: Final ledger approval, journal posting, and vendor profile modification.
-* **Central Immutable Audit Trail:** Logs all modifications to creditor bank details and invoice lifecycle transitions with timestamps and user identifiers.
+* **Central Audit Trail:** Logs all modifications to creditor bank details and invoice lifecycle transitions with timestamps and user identifiers.
 * **Air-Gapped & Local-First:** Runs completely on-premise or within private Docker containers; invoice documents and extraction prompts never leave your local infrastructure.
 
 ---

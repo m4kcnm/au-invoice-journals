@@ -1,5 +1,23 @@
 {% extends "base.html" %}
-{% block title %}Settings{% endblock %}
+{% block title %}Settings
+<article class="card stack" style="margin-top: 1.5rem;">
+  <header>
+    <h3>Account Security</h3>
+    <span class="muted">Rotate local user password</span>
+  </header>
+  <form method="post" action="/change-password" class="stack">
+    <div class="row2">
+      <label>Current Password
+        <input type="password" name="current_password" required autocomplete="current-password" />
+      </label>
+      <label>New Password (min 8 chars)
+        <input type="password" name="new_password" required minlength="8" autocomplete="new-password" />
+      </label>
+    </div>
+    <button class="btn" type="submit" style="align-self: flex-start; margin-top: 0.5rem;">Update Password</button>
+  </form>
+</article>
+{% endblock %}
 {% block body %}
 <h2>Settings</h2>
 <form class="card stack" method="post" action="/settings">
@@ -17,7 +35,7 @@
     </select>
   </label>
 
-  <h3 style="margin-top: 1rem; margin-bottom: 0.3rem;">Direct Entry Banking (ABA Cemtext)</h3>
+  <h3 style="margin-top: 1rem; margin-bottom: 0.3rem;">Direct Entry Banking (ABA Cemtex)</h3>
   <div class="row2">
     <label>Financial Institution Code (3 Chars)
       <input name="bank_code" value="{{ bank_code }}" placeholder="e.g. PCU, WBC, CBA, ANZ, NAB" maxlength="3" />
@@ -48,4 +66,22 @@
   </label>
   <button class="btn primary" type="submit" style="margin-top: 0.8rem;">Save Settings</button>
 </form>
+
+<article class="card stack" style="margin-top: 1.5rem;">
+  <header>
+    <h3>Account Security</h3>
+    <span class="muted">Rotate local user password</span>
+  </header>
+  <form method="post" action="/change-password" class="stack">
+    <div class="row2">
+      <label>Current Password
+        <input type="password" name="current_password" required autocomplete="current-password" />
+      </label>
+      <label>New Password (min 8 chars)
+        <input type="password" name="new_password" required minlength="8" autocomplete="new-password" />
+      </label>
+    </div>
+    <button class="btn" type="submit" style="align-self: flex-start; margin-top: 0.5rem;">Update Password</button>
+  </form>
+</article>
 {% endblock %}

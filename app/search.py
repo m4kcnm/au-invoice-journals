@@ -9,7 +9,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 
 from app.gst import money
-from app.models import Account, Creditor, Invoice, InvoiceLine, InvoiceType, SessionLocal
+from app.models import Account, Invoice, InvoiceLine, InvoiceType, SessionLocal
 from app.ollama_client import chat_json, list_models, pick_model
 
 SEARCH_SYSTEM = """You are an intelligent search query parser for an Australian general ledger and Accounts Payable system.

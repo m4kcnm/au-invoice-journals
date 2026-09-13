@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 import shutil
-import traceback
 from datetime import date
-from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 from app.abn import digits_only
 from app.config import DATA_DIR, INBOX_DIR, INVOICES_DIR
@@ -22,7 +18,6 @@ from app.models import (
     InvoiceLine,
     SessionLocal,
     get_setting,
-    set_setting,
 )
 
 logger = logging.getLogger("services")
@@ -258,6 +253,21 @@ def apply_invoice_form(invoice_id: int, form: dict, user=None) -> None:
         inv.gst_amount = money(form.get("gst_amount") or 0)
         inv.subtotal_ex_gst = money(form.get("subtotal_ex_gst") or 0)
 
+        if inv.supplier_abn and inv.invoice_number:
+            duplicate = (
+                session.query(Invoice)
+                .filter(
+                    Invoice.id != inv.id,
+                    Invoice.supplier_abn == inv.supplier_abn,
+                    Invoice.invoice_number == inv.invoice_number,
+                )
+                .first()
+            )
+            if duplicate:
+                raise ValueError(
+                    f"Duplicate invoice blocked: supplier ABN {inv.supplier_abn} already has invoice {inv.invoice_number} (record #{duplicate.id})."
+                )
+
         itype = form.get("invoice_type_id") or ""
         inv.invoice_type_id = int(itype) if itype else None
 
@@ -352,3 +362,48 @@ def archive_posted_invoice(invoice_id: int) -> Path | None:
         return target_path
     finally:
         session.close()
+
+
+def build_transient_invoice(original_inv: Invoice, form: dict) -> Invoice:
+    """Constructs a detached, in-memory Invoice object for pure calculation without DB persistence."""
+    inv = Invoice(
+        id=original_inv.id,
+        filename=original_inv.filename,
+        supplier_name=(form.get("supplier_name") or "").strip(),
+        supplier_abn=digits_only(form.get("supplier_abn") or ""),
+        invoice_number=(form.get("invoice_number") or "").strip(),
+        invoice_date=_d(form.get("invoice_date")),
+        due_date=_d(form.get("due_date")),
+        is_tax_invoice=form.get("is_tax_invoice") == "on",
+        gst_inclusive=form.get("gst_inclusive") == "on",
+        gst_registered=form.get("gst_registered") == "on",
+        total=money(form.get("total") or 0),
+        gst_amount=money(form.get("gst_amount") or 0),
+        subtotal_ex_gst=money(form.get("subtotal_ex_gst") or 0),
+        invoice_type_id=int(form["invoice_type_id"]) if form.get("invoice_type_id") else None,
+        creditor_id=original_inv.creditor_id,
+    )
+    line_indices = sorted({
+        int(k.split("_")[-1])
+        for k in form.keys()
+        if k.startswith("line_desc_") and k.split("_")[-1].isdigit()
+    })
+    lines = []
+    for order_idx, i in enumerate(line_indices):
+        desc = (form.get(f"line_desc_{i}") or "").strip()
+        amt = form.get(f"line_amount_{i}")
+        if not desc and not amt:
+            continue
+        acc = form.get(f"line_account_{i}") or ""
+        lines.append(
+            InvoiceLine(
+                line_number=order_idx,
+                description=desc or "Item",
+                amount=money(amt or 0),
+                gst_amount=money(form.get(f"line_gst_{i}") or 0),
+                gst_treatment=form.get(f"line_treatment_{i}") or "",
+                account_id=int(acc) if acc else None,
+            )
+        )
+    inv.lines = lines
+    return inv

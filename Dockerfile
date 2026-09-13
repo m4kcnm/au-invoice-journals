@@ -14,7 +14,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p data/invoices data/inbox data/archive
+RUN useradd -u 1000 -U -s /bin/bash appuser && \
+    mkdir -p data/invoices data/inbox data/archive && \
+    chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8743
 
