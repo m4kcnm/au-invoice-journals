@@ -29,3 +29,9 @@ Thumbs.db
 .env
 *.local
 codebase_dump.txt
+
+# Local developer artifacts
+*.app/
+dump_codebase.sh
+codebase_dump*.txt
+*.command
