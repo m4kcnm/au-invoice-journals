@@ -287,10 +287,10 @@ def download_aba_file(user: User = Depends(require_approver)):
                 content={"error": "No unbatched posted invoices available for ABA export."}
             )
 
-        bank_code = get_setting(session, "bank_code", "PCU")
+        bank_code = get_setting(session, "bank_code", "NAB")
         user_name = get_setting(session, "entity_name", "My Australian Business")
         apca = get_setting(session, "user_apca_number", "123456")
-        bsb = get_setting(session, "remitter_bsb", "085-005")
+        bsb = get_setting(session, "remitter_bsb", "082-001")
         acc = get_setting(session, "remitter_account", "123456789")
 
         try:
@@ -1053,9 +1053,9 @@ def settings_page(request: Request, user: User = Depends(require_approver)):
                 entity_name=get_setting(session, "entity_name"),
                 gst_registered=get_setting(session, "gst_registered") == "true",
                 accounting_basis=get_setting(session, "accounting_basis"),
-                bank_code=get_setting(session, "bank_code", "PCU"),
+                bank_code=get_setting(session, "bank_code", "NAB"),
                 user_apca_number=get_setting(session, "user_apca_number", "123456"),
-                remitter_bsb=get_setting(session, "remitter_bsb", "085-005"),
+                remitter_bsb=get_setting(session, "remitter_bsb", "082-001"),
                 remitter_account=get_setting(session, "remitter_account", "123456789"),
                 ollama_url=url,
                 ollama_model=get_setting(session, "ollama_model"),
@@ -1072,9 +1072,9 @@ def save_settings(
     entity_name: str = Form(...),
     gst_registered: str = Form("false"),
     accounting_basis: str = Form("accrual"),
-    bank_code: str = Form("PCU"),
+    bank_code: str = Form("NAB"),
     user_apca_number: str = Form("123456"),
-    remitter_bsb: str = Form("085-005"),
+    remitter_bsb: str = Form("082-001"),
     remitter_account: str = Form("123456789"),
     ollama_url: str = Form(...),
     ollama_model: str = Form(""),
