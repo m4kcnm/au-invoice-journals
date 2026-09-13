@@ -40,29 +40,35 @@ An automated Accounts Payable (AP) and Tax Invoice processing system designed fo
 
 ---
 
-## Directory Structure
-
-```text
+text
 .
 ├── app/
 │   ├── abn.py              # ATO Modulus 89 validation algorithm
-│   ├── auth.py             # PBKDF2 hashing, session tokens, RBAC dependencies
+│   ├── aba.py              # APCA Direct Entry (ABA) export file generator
+│   ├── auth.py             # PBKDF2 hashing, signed session tokens, RBAC dependencies
 │   ├── extract.py          # Multi-layout regex & Ollama AI extraction engine
-│   ├── gst.py              # Australian GST division & rounding utilities
-│   ├── journals.py         # Double-entry general ledger balance generator
-│   ├── models.py           # SQLAlchemy database schema and audit log definitions
-│   ├── ollama_client.py    # Local inference client with JSON schema enforcement
-│   ├── search.py           # Natural language and tokenized ledger query parser
-│   ├── seed.py             # Default chart of accounts and baseline test users
-│   ├── services.py         # Business operations (file storage, state transitions)
-│   ├── web.py              # FastAPI endpoint routing and view controllers
-│   └── templates/          # Jinja2 views (creditors, journals, invoices, audit)
-├── data/                   # SQLite database file and document file storage (git-ignored)
+│   ├── gst.py              # Australian GST calculation, splitting & statutory guards
+│   ├── journals.py         # Double-entry general ledger balance & posting safeguards
+│   ├── mappings.py         # Heuristic GL account rule engine & priority matcher
+│   ├── models.py           # SQLAlchemy schema, payment batches & audit definitions
+│   ├── ollama_client.py    # Local inference client with structured JSON schema
+│   ├── search.py           # Tokenized invoice & ledger query parser
+│   ├── seed.py             # Default chart of accounts, routing rules & demo users
+│   ├── services.py         # Business operations, file storage & state transitions
+│   ├── web.py              # FastAPI routes, lifecycle endpoints & view controllers
+│   ├── static/             # Vanilla CSS styles and interactive JavaScript (app.js)
+│   └── templates/          # Jinja2 views (payments, creditors, journals, audit)
+├── data/                   # SQLite database and document storage (git-ignored)
 ├── inbox/                  # Monitored directory for automated batch ingestion
-├── docker-compose.yml      # Multi-container orchestration definition
+├── docker-compose.yml      # Container orchestration definition
 ├── Dockerfile              # Container build specifications
 ├── requirements.txt        # Python package dependencies
+├── run.py                  # Local Python server entrypoint
+├── start.sh                # Local convenience launch script
 └── README.md
+```
+
+---
 
 ## Directory Structure
 
